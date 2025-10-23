@@ -111,6 +111,18 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 doubleTester.RunAllTests();
                 
                 Print("");
+                Print("");
+
+                // ============================================================
+                // ORDER BLOCK DETECTOR TESTS
+                // ============================================================
+                Print(">>> Ejecutando OrderBlockDetector Tests...");
+                Print("");
+                
+                var orderBlockTester = new OrderBlockDetectorTests(Print);
+                orderBlockTester.RunAll();
+                
+                Print("");
                 Print(">>> Todos los tests completados!");
                 Print("");
                 Print("==============================================");
