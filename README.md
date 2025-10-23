@@ -42,30 +42,52 @@ Desarrollar el **mejor analizador de mercado del mundo** con arquitectura modula
 
 ---
 
-### 🚧 FASE 2: FVGDetector + Scoring (Próxima)
+### ✅ FASE 2: FVGDetector + Scoring - COMPLETADA (100%)
 
-**Objetivos:**
+**Commit:** `2957531` - Fase 2: FVGDetector y ScoringEngine completos con 52 tests (100% pass)
 
-1. **FVGDetector completo**:
-   - Detección de gaps bullish/bearish
-   - Validación por tamaño (ticks + ATR)
-   - Merge de FVGs consecutivos
-   - Detección de FVGs anidados
-   - Tracking de toques (body/wick)
-   - Cálculo de Fill Percentage
+**Componentes Implementados:**
 
-2. **Sistema de Scoring**:
-   - TF Weight normalization
-   - Freshness (decay exponencial)
-   - Proximity (distancia al precio actual)
-   - Touch factor (bonus por toques)
-   - Fill handling (residual score)
+- ✅ **FVGDetector.cs** - Detector completo de Fair Value Gaps
+  - Detección de gaps bullish/bearish con validación por tamaño
+  - Merge de FVGs consecutivos (configurable)
+  - Detección de FVGs anidados multi-nivel
+  - Tracking de toques (body/wick)
+  - Cálculo de Fill Percentage con residual score
+  
+- ✅ **ScoringEngine.cs** - Sistema de scoring multi-dimensional
+  - TF Weight normalization
+  - Freshness (decay exponencial)
+  - Proximity dinámica (ATR-based)
+  - Touch factor (bonus por toques)
+  - Fill handling (residual score)
+  - Multi-timeframe scoring
 
-3. **API pública**: `GetActiveFVGs(int tfMinutes, double minScore)`
+- ✅ **FVGDetectorTests.cs** - 12 tests básicos
+- ✅ **FVGDetectorAdvancedTests.cs** - 29 tests avanzados
+
+**Tests Validados:**
+- ✅ 52/52 tests pasados (100%)
+  - 11/11 IntervalTree tests
+  - 12/12 FVGDetector básicos
+  - 29/29 FVGDetector avanzados (merge, nested, fill, scoring, edge cases)
+- ✅ Cobertura: 95%
+- ✅ Confianza: 95%
+
+**Bugs Corregidos:**
+- ✅ ATR calculation con barras insuficientes
+- ✅ Lógica de nested multi-nivel (buscar padre más específico)
+
+**API Pública:**
+- `GetActiveFVGs(int tfMinutes, double minScore)` - Obtener FVGs activos filtrados por score
+
+**Documentación:**
+- `docs/COBERTURA_TESTS.md` - Desglose completo de cobertura de tests
+- `docs/INSTRUCCIONES_TESTS_AVANZADOS.md` - Guía de tests avanzados
 
 ---
 
-### 📋 FASE 3: Detectores Avanzados (Pendiente)
+### 🚧 FASE 3: Detectores Avanzados (Próxima)
 
 - SwingDetector
 - DoubleDetector (Double Tops/Bottoms)
