@@ -1,3 +1,0 @@
-warning: in the working copy of 'src/Core/CoreEngine.cs', LF will be replaced by CRLF the next time Git touches it
-warning: in the working copy of 'src/Detectors/POIDetector.cs', LF will be replaced by CRLF the next time Git touches it
-warning: in the working copy of 'src/Testing/POIDetectorTests.cs', LF will be replaced by CRLF the next time Git touches it
