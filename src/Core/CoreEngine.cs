@@ -250,6 +250,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             _detectors.Add(orderBlockDetector);
             _logger.Info("  ✓ OrderBlockDetector registrado");
 
+            // FASE 6: BOSDetector (Break of Structure / Change of Character)
+            var bosDetector = new BOSDetector();
+            bosDetector.Initialize(_provider, _config, _logger);
+            _detectors.Add(bosDetector);
+            _logger.Info("  ✓ BOSDetector registrado");
+
             _logger.Info($"Total detectores registrados: {_detectors.Count}");
         }
 
@@ -376,6 +382,85 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
                 // Disparar evento
                 OnStructureUpdated?.Invoke(structure);
+            }
+            finally
+            {
+                _stateLock.ExitWriteLock();
+            }
+        }
+
+        /// <summary>
+        /// Actualiza el CurrentMarketBias basado en los breaks recientes
+        /// Llamado por BOSDetector cuando se detecta un nuevo break
+        /// 
+        /// Algoritmo de votación ponderada:
+        /// - Se consideran los últimos MaxRecentBreaksForBias breaks
+        /// - Breaks con momentum "Strong" tienen peso 2.0
+        /// - Breaks con momentum "Weak" tienen peso 1.0
+        /// - Se suman los pesos por dirección (Bullish/Bearish)
+        /// - El bias se determina por la dirección con más peso total
+        /// - Si la diferencia es < 20%, el bias es "Neutral"
+        /// </summary>
+        /// <param name="tfMinutes">Timeframe en el que calcular el bias</param>
+        public void UpdateCurrentMarketBias(int tfMinutes)
+        {
+            _stateLock.EnterWriteLock();
+            try
+            {
+                if (!_structuresListByTF.ContainsKey(tfMinutes))
+                    return;
+
+                // Obtener los últimos N breaks
+                var recentBreaks = _structuresListByTF[tfMinutes]
+                    .OfType<StructureBreakInfo>()
+                    .Where(sb => sb.IsActive)
+                    .OrderByDescending(sb => sb.StartTime)
+                    .Take(_config.MaxRecentBreaksForBias)
+                    .ToList();
+
+                if (recentBreaks.Count == 0)
+                {
+                    _currentMarketBias = "Neutral";
+                    return;
+                }
+
+                // Votación ponderada
+                double bullishWeight = 0.0;
+                double bearishWeight = 0.0;
+
+                foreach (var sb in recentBreaks)
+                {
+                    double weight = sb.BreakMomentum == "Strong" ? 2.0 : 1.0;
+
+                    if (sb.Direction == "Bullish")
+                        bullishWeight += weight;
+                    else if (sb.Direction == "Bearish")
+                        bearishWeight += weight;
+                }
+
+                double totalWeight = bullishWeight + bearishWeight;
+                if (totalWeight == 0)
+                {
+                    _currentMarketBias = "Neutral";
+                    return;
+                }
+
+                // Calcular porcentajes
+                double bullishPercent = bullishWeight / totalWeight;
+                double bearishPercent = bearishWeight / totalWeight;
+
+                // Determinar bias (requiere > 60% para ser definitivo)
+                if (bullishPercent >= 0.6)
+                    _currentMarketBias = "Bullish";
+                else if (bearishPercent >= 0.6)
+                    _currentMarketBias = "Bearish";
+                else
+                    _currentMarketBias = "Neutral";
+
+                if (_config.EnableDebug)
+                    _logger.Debug($"CurrentMarketBias actualizado a '{_currentMarketBias}' " +
+                                 $"(Bullish:{bullishPercent:P0}, Bearish:{bearishPercent:P0}, " +
+                                 $"basado en {recentBreaks.Count} breaks recientes)");
             }
             finally
             {
@@ -528,6 +613,40 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     .OfType<OrderBlockInfo>()
                     .Where(ob => ob.IsActive && !ob.IsMitigated && ob.Score >= minScore)
                     .OrderByDescending(ob => ob.Score)
+                    .ToList();
+            }
+            finally
+            {
+                _stateLock.ExitReadLock();
+            }
+        }
+
+        /// <summary>
+        /// Obtiene Structure Breaks (BOS/CHoCH) ordenados por fecha
+        /// </summary>
+        /// <param name="tfMinutes">Timeframe en minutos</param>
+        /// <param name="breakType">Filtrar por tipo: "BOS", "CHoCH", o null para ambos</param>
+        /// <param name="maxCount">Número máximo de breaks a retornar (más recientes primero)</param>
+        /// <returns>Lista de StructureBreakInfo ordenada por fecha descendente</returns>
+        public IReadOnlyList<StructureBreakInfo> GetStructureBreaks(int tfMinutes, string breakType = null, int maxCount = 50)
+        {
+            _stateLock.EnterReadLock();
+            try
+            {
+                if (!_structuresListByTF.ContainsKey(tfMinutes))
+                    return new List<StructureBreakInfo>();
+
+                var query = _structuresListByTF[tfMinutes]
+                    .OfType<StructureBreakInfo>()
+                    .Where(sb => sb.IsActive);
+
+                // Filtrar por tipo si se especifica
+                if (!string.IsNullOrEmpty(breakType))
+                    query = query.Where(sb => sb.BreakType == breakType);
+
+                return query
+                    .OrderByDescending(sb => sb.StartTime)
+                    .Take(maxCount)
                     .ToList();
             }
             finally

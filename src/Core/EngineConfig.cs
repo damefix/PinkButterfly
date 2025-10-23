@@ -232,6 +232,19 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// Multiplier de score cuando hay momentum débil alineado con la estructura
         /// </summary>
         public double BreakMomentumMultiplierWeak { get; set; } = 1.1;
+        
+        /// <summary>
+        /// Número de barras para confirmar la ruptura de un swing
+        /// El precio debe cerrar más allá del swing durante N barras consecutivas
+        /// </summary>
+        public int nConfirmBars_BOS { get; set; } = 1;
+        
+        /// <summary>
+        /// Número máximo de breaks recientes a considerar para calcular CurrentMarketBias
+        /// El bias se calcula por votación ponderada de los últimos N breaks
+        /// Breaks con momentum "Strong" tienen más peso en la votación
+        /// </summary>
+        public int MaxRecentBreaksForBias { get; set; } = 10;
 
         // ========================================================================
         // CONFIGURACIÓN DE SISTEMA
