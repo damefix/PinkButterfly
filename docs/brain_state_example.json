@@ -1,0 +1,295 @@
+{
+  "Version": "1.1",
+  "Instrument": "ES 03-25",
+  "EngineConfigHash": "a8f5f167f44f4964e6c998dee827110c284a2b8c9e9f5c9d3c4e1e9f9a1d3e2f",
+  "LastUpdatedUTC": "2025-10-23T12:30:00Z",
+  "CurrentMarketBias": "Bullish",
+  "StructuresByTF": {
+    "15": [
+      {
+        "$type": "FVGInfo",
+        "Id": "fvg-15m-001",
+        "Type": "FVG",
+        "Direction": "Bullish",
+        "TF": 15,
+        "StartTime": "2025-10-23T10:00:00Z",
+        "EndTime": "2025-10-23T10:15:00Z",
+        "High": 5845.50,
+        "Low": 5843.25,
+        "IsActive": true,
+        "IsCompleted": false,
+        "CreatedAtBarIndex": 1234,
+        "LastUpdatedBarIndex": 1250,
+        "Score": 0.425,
+        "TouchCount_Body": 1,
+        "TouchCount_Wick": 3,
+        "RelatedStructureIds": ["poi-60m-003"],
+        "FillPercentage": 0.35,
+        "TouchedRecently": true,
+        "ParentId": null,
+        "DepthLevel": 0,
+        "Metadata": {
+          "VolumeAtCreation": 12845.0,
+          "AverageRangeDuringFormation": 2.25,
+          "CreatedByDetector": "FVGDetector",
+          "Tags": {
+            "session": "US_Open",
+            "volatility": "high"
+          }
+        }
+      }
+    ],
+    "60": [
+      {
+        "$type": "FVGInfo",
+        "Id": "fvg-60m-001",
+        "Type": "FVG",
+        "Direction": "Bearish",
+        "TF": 60,
+        "StartTime": "2025-10-23T09:00:00Z",
+        "EndTime": "2025-10-23T10:00:00Z",
+        "High": 5852.75,
+        "Low": 5848.00,
+        "IsActive": false,
+        "IsCompleted": true,
+        "CreatedAtBarIndex": 456,
+        "LastUpdatedBarIndex": 465,
+        "Score": 0.08,
+        "TouchCount_Body": 5,
+        "TouchCount_Wick": 2,
+        "RelatedStructureIds": [],
+        "FillPercentage": 0.95,
+        "TouchedRecently": false,
+        "ParentId": null,
+        "DepthLevel": 0,
+        "Metadata": {
+          "VolumeAtCreation": 45230.0,
+          "AverageRangeDuringFormation": 4.75,
+          "CreatedByDetector": "FVGDetector",
+          "Tags": {
+            "filled": "true",
+            "residual_score": "true"
+          }
+        }
+      },
+      {
+        "$type": "SwingInfo",
+        "Id": "swing-60m-h-001",
+        "Type": "SWING",
+        "TF": 60,
+        "StartTime": "2025-10-23T08:00:00Z",
+        "EndTime": "2025-10-23T08:00:00Z",
+        "High": 5855.00,
+        "Low": 5850.25,
+        "IsActive": true,
+        "IsCompleted": true,
+        "CreatedAtBarIndex": 450,
+        "LastUpdatedBarIndex": 450,
+        "Score": 0.62,
+        "TouchCount_Body": 0,
+        "TouchCount_Wick": 1,
+        "RelatedStructureIds": ["bos-60m-001", "double-240m-001"],
+        "IsHigh": true,
+        "LeftN": 2,
+        "RightN": 2,
+        "SwingSizeTicks": 19,
+        "IsBroken": false,
+        "Metadata": {
+          "VolumeAtCreation": 38900.0,
+          "AverageRangeDuringFormation": 4.75,
+          "CreatedByDetector": "SwingDetector",
+          "Tags": {
+            "swing_strength": "medium"
+          }
+        }
+      },
+      {
+        "$type": "OrderBlockInfo",
+        "Id": "ob-60m-bull-001",
+        "Type": "OB",
+        "Direction": "Bullish",
+        "TF": 60,
+        "StartTime": "2025-10-23T07:00:00Z",
+        "EndTime": "2025-10-23T08:00:00Z",
+        "High": 5842.50,
+        "Low": 5838.75,
+        "IsActive": true,
+        "IsCompleted": false,
+        "CreatedAtBarIndex": 445,
+        "LastUpdatedBarIndex": 465,
+        "Score": 0.78,
+        "TouchCount_Body": 2,
+        "TouchCount_Wick": 1,
+        "RelatedStructureIds": ["poi-60m-003"],
+        "OpenPrice": 5839.00,
+        "ClosePrice": 5842.25,
+        "IsBreaker": false,
+        "IsMitigated": false,
+        "Metadata": {
+          "VolumeAtCreation": 67850.0,
+          "AverageRangeDuringFormation": 3.75,
+          "CreatedByDetector": "OrderBlockDetector",
+          "Tags": {
+            "body_size_atr_ratio": "0.85",
+            "volume_spike": "true"
+          }
+        }
+      },
+      {
+        "$type": "PointOfInterestInfo",
+        "Id": "poi-60m-003",
+        "Type": "POI",
+        "TF": 60,
+        "StartTime": "2025-10-23T07:00:00Z",
+        "EndTime": "2025-10-23T10:00:00Z",
+        "High": 5843.50,
+        "Low": 5838.00,
+        "IsActive": true,
+        "IsCompleted": false,
+        "CreatedAtBarIndex": 465,
+        "LastUpdatedBarIndex": 465,
+        "Score": 0.89,
+        "TouchCount_Body": 3,
+        "TouchCount_Wick": 4,
+        "RelatedStructureIds": [],
+        "SourceIds": [
+          "ob-60m-bull-001",
+          "fvg-15m-001",
+          "swing-60m-l-002"
+        ],
+        "CompositeScore": 0.89,
+        "Bias": "BuySide",
+        "IsPremium": false,
+        "Metadata": {
+          "VolumeAtCreation": null,
+          "AverageRangeDuringFormation": null,
+          "CreatedByDetector": "POIDetector",
+          "Tags": {
+            "confluence_count": "3",
+            "sources": "OB+FVG+SWING"
+          }
+        }
+      }
+    ],
+    "240": [
+      {
+        "$type": "DoubleTopInfo",
+        "Id": "double-240m-001",
+        "Type": "DOUBLE_TOP",
+        "TF": 240,
+        "StartTime": "2025-10-22T16:00:00Z",
+        "EndTime": "2025-10-23T08:00:00Z",
+        "High": 5855.50,
+        "Low": 5846.00,
+        "IsActive": true,
+        "IsCompleted": true,
+        "CreatedAtBarIndex": 112,
+        "LastUpdatedBarIndex": 116,
+        "Score": 0.55,
+        "TouchCount_Body": 0,
+        "TouchCount_Wick": 0,
+        "RelatedStructureIds": ["swing-60m-h-001"],
+        "Swing1Time": "2025-10-22T16:00:00Z",
+        "Swing2Time": "2025-10-23T08:00:00Z",
+        "NecklinePrice": 5846.00,
+        "Status": "Pending",
+        "Metadata": {
+          "VolumeAtCreation": null,
+          "AverageRangeDuringFormation": 9.50,
+          "CreatedByDetector": "DoubleDetector",
+          "Tags": {
+            "price_tolerance_ticks": "3",
+            "bars_between": "64"
+          }
+        }
+      },
+      {
+        "$type": "StructureBreakInfo",
+        "Id": "bos-240m-001",
+        "Type": "BOS",
+        "BreakType": "BOS",
+        "TF": 240,
+        "StartTime": "2025-10-23T04:00:00Z",
+        "EndTime": "2025-10-23T08:00:00Z",
+        "High": 5850.00,
+        "Low": 5842.00,
+        "IsActive": true,
+        "IsCompleted": true,
+        "CreatedAtBarIndex": 115,
+        "LastUpdatedBarIndex": 116,
+        "Score": 0.72,
+        "TouchCount_Body": 0,
+        "TouchCount_Wick": 0,
+        "RelatedStructureIds": ["swing-240m-l-005"],
+        "BrokenSwingId": "swing-240m-l-005",
+        "BreakPrice": 5842.00,
+        "Direction": "Bullish",
+        "BreakMomentum": "Strong",
+        "Metadata": {
+          "VolumeAtCreation": 125600.0,
+          "AverageRangeDuringFormation": 8.00,
+          "CreatedByDetector": "BOSDetector",
+          "Tags": {
+            "body_size_atr_ratio": "0.82",
+            "confirms_trend": "true"
+          }
+        }
+      }
+    ],
+    "1440": [
+      {
+        "$type": "OrderBlockInfo",
+        "Id": "ob-daily-bull-001",
+        "Type": "OB",
+        "Direction": "Bullish",
+        "TF": 1440,
+        "StartTime": "2025-10-20T17:00:00Z",
+        "EndTime": "2025-10-21T17:00:00Z",
+        "High": 5838.00,
+        "Low": 5815.50,
+        "IsActive": true,
+        "IsCompleted": false,
+        "CreatedAtBarIndex": 5,
+        "LastUpdatedBarIndex": 8,
+        "Score": 0.92,
+        "TouchCount_Body": 1,
+        "TouchCount_Wick": 0,
+        "RelatedStructureIds": ["poi-daily-001"],
+        "OpenPrice": 5816.00,
+        "ClosePrice": 5837.50,
+        "IsBreaker": false,
+        "IsMitigated": false,
+        "Metadata": {
+          "VolumeAtCreation": 985600.0,
+          "AverageRangeDuringFormation": 22.50,
+          "CreatedByDetector": "OrderBlockDetector",
+          "Tags": {
+            "daily_strong_move": "true",
+            "institutional_level": "probable"
+          }
+        }
+      }
+    ]
+  },
+  "Statistics": {
+    "TotalStructures": 10,
+    "ActiveStructures": 8,
+    "CompletedStructures": 3,
+    "StructuresByType": {
+      "FVG": 2,
+      "SWING": 1,
+      "OB": 2,
+      "POI": 1,
+      "DOUBLE_TOP": 1,
+      "BOS": 1,
+      "CHoCH": 0
+    },
+    "AverageScoreByTF": {
+      "15": 0.425,
+      "60": 0.595,
+      "240": 0.635,
+      "1440": 0.920
+    }
+  }
+}
+
