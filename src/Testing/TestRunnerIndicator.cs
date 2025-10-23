@@ -53,15 +53,41 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         {
             try
             {
+                // ============================================================
+                // INTERVAL TREE TESTS
+                // ============================================================
                 Print(">>> Ejecutando IntervalTree Tests...");
                 Print("");
                 
-                // Crear tester pasándole el método Print como logger
-                var tester = new IntervalTreeTests(Print);
-                tester.RunAllTests();
+                var intervalTreeTester = new IntervalTreeTests(Print);
+                intervalTreeTester.RunAllTests();
                 
                 Print("");
-                Print(">>> Tests completados!");
+                Print("");
+
+                // ============================================================
+                // FVG DETECTOR & SCORING TESTS (BÁSICOS)
+                // ============================================================
+                Print(">>> Ejecutando FVGDetector & Scoring Tests (Básicos)...");
+                Print("");
+                
+                var fvgTester = new FVGDetectorTests(Print);
+                fvgTester.RunAllTests();
+                
+                Print("");
+                Print("");
+
+                // ============================================================
+                // FVG DETECTOR ADVANCED TESTS
+                // ============================================================
+                Print(">>> Ejecutando FVGDetector Advanced Tests...");
+                Print("");
+                
+                var fvgAdvancedTester = new FVGDetectorAdvancedTests(Print);
+                fvgAdvancedTester.RunAllTests();
+                
+                Print("");
+                Print(">>> Todos los tests completados!");
                 Print("");
                 Print("==============================================");
             }
