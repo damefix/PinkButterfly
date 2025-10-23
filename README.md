@@ -268,6 +268,8 @@ Desarrollar el **mejor analizador de mercado del mundo** con arquitectura modula
 
 **Commit:** `020234c` - Fase 6: BOSDetector completo con 28 tests (100% pass) - Detecta BOS/CHoCH, calcula momentum, actualiza CurrentMarketBias con votación ponderada
 
+**Branch:** `feature/fase-6-bos-detector` (merged to master)
+
 **Componentes Implementados:**
 
 - ✅ **BOSDetector.cs** - Detector completo de Break of Structure y Change of Character
@@ -390,15 +392,161 @@ if (recentChoCH != null && recentChoCH.CreatedAtBarIndex >= currentBar - 5)
 
 ---
 
-### 🚧 FASE 7: POIDetector (Próxima)
+### ✅ FASE 7: POIDetector - COMPLETADA (100%) ⭐
 
-- POIDetector (Points of Interest)
-- Liquidity Voids
-- Confluence Zones
+**Commit:** `5c1cb0c` - Fase 7: POIDetector completo con 26 tests (100% pass) - Detecta confluencias, calcula composite score, determina bias y premium/discount zones
+
+**Branch:** `feature/fase-7-poi-detector` (merged to master)
+
+**Componentes Implementados:**
+
+- ✅ **POIDetector.cs** - Detector completo de Points of Interest (Zonas de Confluencia)
+  - Detección automática de confluencias entre estructuras (FVG, OB, Swing, Double, BOS)
+  - Tolerancia de overlap configurable (`OverlapToleranceATR`)
+  - Mínimo de estructuras para crear POI (`MinStructuresForPOI`)
+  - Cálculo de **Composite Score** (promedio ponderado + bonus por confluencia)
+  - Determinación automática de **Bias** ("BuySide", "SellSide", "Neutral")
+  - Clasificación **Premium/Discount** basada en rango del mercado
+  - Actualización dinámica de POIs existentes cuando cambian las estructuras fuente
+  - Purga automática de POIs cuando sus estructuras fuente se invalidan
+  - Cache por timeframe para performance
+  
+- ✅ **EngineConfig.cs** - Actualizado con parámetros POI
+  - `OverlapToleranceATR`: 0.5 (tolerancia de overlap como factor del ATR)
+  - `MinStructuresForPOI`: 2 (mínimo de estructuras para crear POI)
+  - `POI_ConfluenceBonus`: 0.15 (bonus por cada estructura adicional)
+  - `POI_MaxConfluenceBonus`: 0.5 (máximo bonus por confluencia)
+  - `POI_PremiumThreshold`: 0.618 (threshold Fibonacci para Premium/Discount)
+  - `POI_PremiumLookbackBars`: 50 (barras para calcular rango del mercado)
+  
+- ✅ **CoreEngine.cs** - Actualizado con API de POI
+  - `GetPOIs(int tfMinutes, double minScore)` - Obtener POIs filtrados por score
+  
+- ✅ **POIDetectorTests.cs** - 26 tests exhaustivos
+  - Detección básica de confluencias (FVG+FVG, FVG+OB)
+  - Validación de overlap tolerance (dentro/fuera de ATR)
+  - Composite Score (weighted sum + confluence bonus)
+  - Determinación de Bias (BuySide/SellSide/Neutral)
+  - Clasificación Premium/Discount
+  - Actualización dinámica de POIs
+  - Purga de POIs cuando estructuras fuente se invalidan
+  - Prevención de duplicados
+  - Edge cases (estructuras insuficientes, POI con POI, etc)
+
+**Tests Validados:**
+- ✅ 179/179 tests pasados (100%)
+  - 11/11 IntervalTree tests
+  - 12/12 FVGDetector básicos
+  - 29/29 FVGDetector avanzados
+  - 26/26 SwingDetector tests
+  - 23/23 DoubleDetector tests
+  - 24/24 OrderBlockDetector tests
+  - 28/28 BOSDetector tests
+  - 26/26 POIDetector tests ⭐ NUEVO
+- ✅ Cobertura: 93%
+- ✅ Confianza: 95%
+
+**API Pública:**
+- `GetPOIs(int tfMinutes, double minScore)` - Obtener POIs filtrados por composite score
+
+**Conceptos Implementados:**
+
+1. **Point of Interest (POI):**
+   - Zona donde confluyen múltiples estructuras de mercado
+   - Indica áreas de alta probabilidad de reacción del precio
+   - Cada POI tiene un Composite Score basado en sus estructuras fuente
+   - Los POIs se actualizan dinámicamente cuando cambian las estructuras
+
+2. **Confluence Detection:**
+   - Detecta overlap entre estructuras usando `OverlapToleranceATR`
+   - Ejemplo: 2 FVGs a menos de 0.5 * ATR se consideran en confluencia
+   - Requiere mínimo `MinStructuresForPOI` estructuras (default: 2)
+   - Soporta cualquier combinación de estructuras (FVG, OB, Swing, Double, BOS)
+
+3. **Composite Score:**
+   - Score base = promedio de scores de estructuras fuente
+   - Bonus por confluencia: `POI_ConfluenceBonus * (numStructures - 1)`
+   - Máximo bonus: `POI_MaxConfluenceBonus` (default: 0.5 = 50%)
+   - Ejemplo: 3 estructuras con score 0.3 → CompositeScore ≈ 0.3 + 0.3 = 0.6
+
+4. **Bias Determination:**
+   - **BuySide**: Mayoría de estructuras son bullish (>50%)
+   - **SellSide**: Mayoría de estructuras son bearish (>50%)
+   - **Neutral**: Empate o sin estructuras con dirección clara
+   - Usado para filtrar POIs según dirección del trade
+
+5. **Premium/Discount Classification:**
+   - Calcula rango del mercado en últimos `POI_PremiumLookbackBars` barras
+   - **Premium**: POI por encima del `POI_PremiumThreshold` (default: 61.8% Fibonacci)
+   - **Discount**: POI por debajo del threshold
+   - Premium zones: mejores para ventas (short)
+   - Discount zones: mejores para compras (long)
+
+6. **Dynamic Updates:**
+   - POIs se recalculan cuando sus estructuras fuente cambian de score
+   - POIs se purgan automáticamente cuando todas sus estructuras se invalidan
+   - Prevención de duplicados: mismo conjunto de estructuras = mismo POI
+
+**Parámetros de Configuración:**
+- `OverlapToleranceATR`: 0.5 (tolerancia de overlap como factor del ATR)
+- `MinStructuresForPOI`: 2 (mínimo de estructuras para crear POI)
+- `POI_ConfluenceBonus`: 0.15 (bonus por cada estructura adicional)
+- `POI_MaxConfluenceBonus`: 0.5 (máximo bonus por confluencia)
+- `POI_PremiumThreshold`: 0.618 (threshold para Premium/Discount)
+- `POI_PremiumLookbackBars`: 50 (barras para calcular rango)
+
+**Bugs Corregidos:**
+- ✅ Composite Score calculado correctamente (promedio + bonus)
+- ✅ Prevención de duplicados (mismo conjunto de fuentes)
+- ✅ Purga de POIs cuando estructuras fuente se invalidan
+- ✅ Actualización dinámica de Premium/Discount con el mercado
+
+**Uso en Estrategias:**
+```csharp
+// Obtener POIs de alta calidad
+var pois = core.GetPOIs(60, minScore: 0.5);
+
+foreach(var poi in pois)
+{
+    string bias = poi.Bias; // "BuySide", "SellSide", "Neutral"
+    bool isPremium = poi.IsPremium;
+    int numSources = poi.SourceIds.Count;
+    
+    Print($"POI [{poi.Low:F2}-{poi.High:F2}] Score:{poi.CompositeScore*100:F1}% Bias:{bias} Premium:{isPremium} Sources:{numSources}");
+    
+    // Estrategia: Buscar entradas long en POIs Discount con Bias BuySide
+    if (bias == "BuySide" && !isPremium && poi.CompositeScore >= 0.6)
+    {
+        // Setup para entrada long
+    }
+    
+    // Estrategia: Buscar entradas short en POIs Premium con Bias SellSide
+    if (bias == "SellSide" && isPremium && poi.CompositeScore >= 0.6)
+    {
+        // Setup para entrada short
+    }
+}
+
+// Filtrar POIs por bias
+var buySidePOIs = pois.Where(p => p.Bias == "BuySide");
+var sellSidePOIs = pois.Where(p => p.Bias == "SellSide");
+
+// Filtrar POIs Premium/Discount
+var premiumPOIs = pois.Where(p => p.IsPremium);
+var discountPOIs = pois.Where(p => !p.IsPremium);
+```
 
 ---
 
-### 🔄 FASE 8: Persistencia y Optimización (Pendiente)
+### 🚧 FASE 8: Liquidity Voids & Grabs (Próxima)
+
+- LiquidityVoidDetector (zonas sin liquidez)
+- LiquidityGrabDetector (stop hunts)
+- Integración con POIs
+
+---
+
+### 🔄 FASE 9: Persistencia y Optimización (Pendiente)
 
 - Persistencia asíncrona con debounce
 - Sistema de eventos (`OnStructureAdded`, `OnStructureUpdated`, `OnStructureRemoved`)
@@ -407,7 +555,7 @@ if (recentChoCH != null && recentChoCH.CreatedAtBarIndex >= currentBar - 5)
 
 ---
 
-### 🎁 FASE 7: Migración a DLL (Final)
+### 🎁 FASE 10: Migración a DLL (Final)
 
 - Compilación a DLL para protección de IP
 - Sistema de licenciamiento
@@ -443,8 +591,9 @@ if (recentChoCH != null && recentChoCH.CreatedAtBarIndex >= currentBar - 5)
 │   - SwingDetector ✅                    │
 │   - DoubleDetector ✅                   │
 │   - OrderBlockDetector ✅               │
-│   - BOSDetector ✅ NUEVO                │
-│   - POIDetector (próximo)               │
+│   - BOSDetector ✅                      │
+│   - POIDetector ✅ NUEVO                │
+│   - LiquidityDetector (próximo)         │
 └─────────────────────────────────────────┘
 ```
 
@@ -535,6 +684,16 @@ foreach(var brk in breaks)
     string momentum = brk.BreakMomentum; // "Strong" or "Weak"
     Print($"{brk.BreakType} {brk.Direction} @ {brk.BreakPrice:F2} [{momentum}] Score:{brk.Score*100:F1}%");
 }
+
+// FASE 7: POI API
+var pois = core.GetPOIs(60, minScore: 0.5);
+foreach(var poi in pois)
+{
+    string bias = poi.Bias; // "BuySide", "SellSide", "Neutral"
+    bool isPremium = poi.IsPremium;
+    int numSources = poi.SourceIds.Count;
+    Print($"POI [{poi.Low:F2}-{poi.High:F2}] Score:{poi.CompositeScore*100:F1}% Bias:{bias} Premium:{isPremium} Sources:{numSources}");
+}
 ```
 
 ---
@@ -545,18 +704,19 @@ foreach(var brk in breaks)
 PinkButterfly/
 ├── src/
 │   ├── Core/
-│   │   ├── CoreEngine.cs ⭐ ACTUALIZADO (CurrentMarketBias)
-│   │   ├── EngineConfig.cs ⭐ ACTUALIZADO (parámetros BOS)
+│   │   ├── CoreEngine.cs ⭐ ACTUALIZADO (GetPOIs)
+│   │   ├── EngineConfig.cs ⭐ ACTUALIZADO (parámetros POI)
 │   │   ├── ScoringEngine.cs
 │   │   ├── IBarDataProvider.cs
-│   │   └── StructureModels.cs ⭐ ACTUALIZADO (StructureBreakInfo)
+│   │   └── StructureModels.cs (PointOfInterestInfo)
 │   ├── Detectors/
 │   │   ├── IDetector.cs
 │   │   ├── FVGDetector.cs
 │   │   ├── SwingDetector.cs
 │   │   ├── DoubleDetector.cs
 │   │   ├── OrderBlockDetector.cs
-│   │   └── BOSDetector.cs ⭐ NUEVO
+│   │   ├── BOSDetector.cs
+│   │   └── POIDetector.cs ⭐ NUEVO
 │   ├── Infrastructure/
 │   │   ├── ILogger.cs (incluye TestLogger)
 │   │   └── IntervalTree.cs
@@ -570,7 +730,8 @@ PinkButterfly/
 │       ├── SwingDetectorTests.cs
 │       ├── DoubleDetectorTests.cs
 │       ├── OrderBlockDetectorTests.cs
-│       └── BOSDetectorTests.cs ⭐ NUEVO
+│       ├── BOSDetectorTests.cs
+│       └── POIDetectorTests.cs ⭐ NUEVO
 ├── tests/
 │   └── IntervalTreeTests.cs
 ├── lib/
@@ -634,7 +795,7 @@ PinkButterfly/
   - Scoring profesional
   - Edge cases (múltiples OBs, breakers)
 
-- **BOSDetectorTests**: 28 tests ⭐ NUEVO
+- **BOSDetectorTests**: 28 tests
   - Detección básica de breaks (Bullish/Bearish)
   - Clasificación BOS vs CHoCH (4 tests)
   - Momentum Strong vs Weak (4 tests)
@@ -643,11 +804,22 @@ PinkButterfly/
   - Scoring de breaks (3 tests)
   - Edge cases (6 tests)
 
+- **POIDetectorTests**: 26 tests ⭐ NUEVO
+  - Detección básica de confluencias (FVG+FVG, FVG+OB)
+  - Validación de overlap tolerance (3 tests)
+  - Composite Score (weighted sum + confluence bonus) (4 tests)
+  - Determinación de Bias (BuySide/SellSide/Neutral) (3 tests)
+  - Clasificación Premium/Discount (4 tests)
+  - Actualización dinámica de POIs (2 tests)
+  - Purga de POIs (2 tests)
+  - Prevención de duplicados (1 test)
+  - Edge cases (4 tests)
+
 ### Resultados
 
 ```
 ==============================================
-RESUMEN TOTAL - FASE 1, 2, 3, 4, 5 & 6
+RESUMEN TOTAL - FASES 1-7
 ==============================================
 
 IntervalTree Tests:             11/11 ✅ (100%)
@@ -656,10 +828,11 @@ FVG Detector Tests (Avanzados): 29/29 ✅ (100%)
 Swing Detector Tests:           26/26 ✅ (100%)
 Double Detector Tests:          23/23 ✅ (100%)
 Order Block Detector Tests:     24/24 ✅ (100%)
-BOS Detector Tests:             28/28 ✅ (100%) ⭐ NUEVO
+BOS Detector Tests:             28/28 ✅ (100%)
+POI Detector Tests:             26/26 ✅ (100%) ⭐ NUEVO
 
 ==============================================
-TOTAL: 153/153 tests passed (100%)
+TOTAL: 179/179 tests passed (100%)
 ==============================================
 ```
 
@@ -729,11 +902,12 @@ Propietario: Proyecto privado. Sistema comercial en desarrollo.
 - [x] **Fase 3**: SwingDetector (26/26 PASS)
 - [x] **Fase 4**: DoubleDetector (23/23 PASS)
 - [x] **Fase 5**: OrderBlockDetector (24/24 PASS)
-- [x] **Fase 6**: BOSDetector (28/28 PASS) ⭐ COMPLETADA
-- [ ] **Fase 7**: POIDetector y Liquidity Voids
-- [ ] **Fase 8**: Persistencia y optimización
-- [ ] **Fase 9**: Migración a DLL y licenciamiento
+- [x] **Fase 6**: BOSDetector (28/28 PASS)
+- [x] **Fase 7**: POIDetector (26/26 PASS) ⭐ COMPLETADA
+- [ ] **Fase 8**: Liquidity Voids & Grabs
+- [ ] **Fase 9**: Persistencia y optimización
+- [ ] **Fase 10**: Migración a DLL y licenciamiento
 
 ---
 
-**Última actualización**: Fase 6 completada - Tests 153/153 PASS (100%) - BOSDetector con clasificación BOS/CHoCH, momentum Strong/Weak, y CurrentMarketBias con weighted voting
+**Última actualización**: Fase 7 completada - Tests 179/179 PASS (100%) - POIDetector con detección de confluencias, composite score, bias determination y premium/discount classification
