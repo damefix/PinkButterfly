@@ -128,7 +128,20 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 }
 
                 // ============================================================
-                // 10. DECAY (decay adicional por tiempo desde última actualización)
+                // 10. BROKEN SWING HANDLING (Swings rotos)
+                // ============================================================
+                if (structure is SwingInfo swing)
+                {
+                    if (swing.IsBroken)
+                    {
+                        // Swing roto: penalización drástica (10% del score original)
+                        // Los swings rotos pierden relevancia pero mantienen valor histórico
+                        rawScore *= 0.10;
+                    }
+                }
+
+                // ============================================================
+                // 11. DECAY (decay adicional por tiempo desde última actualización)
                 // ============================================================
                 int deltaBarsSinceUpdate = currentBarIndex - structure.LastUpdatedBarIndex;
                 if (deltaBarsSinceUpdate < 0) deltaBarsSinceUpdate = 0;
@@ -137,7 +150,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 double finalScore = rawScore * decay;
 
                 // ============================================================
-                // 11. CLAMP 0.0-1.0
+                // 12. CLAMP 0.0-1.0
                 // ============================================================
                 finalScore = Math.Max(0.0, Math.Min(1.0, finalScore));
 

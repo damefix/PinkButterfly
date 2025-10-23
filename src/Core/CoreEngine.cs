@@ -232,10 +232,11 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             _detectors.Add(fvgDetector);
             _logger.Info("  ✓ FVGDetector registrado");
 
-            // FASE 3: Más detectores...
-            // var swingDetector = new SwingDetector();
-            // swingDetector.Initialize(_provider, _config, _logger);
-            // _detectors.Add(swingDetector);
+            // FASE 3: SwingDetector
+            var swingDetector = new SwingDetector();
+            swingDetector.Initialize(_provider, _config, _logger);
+            _detectors.Add(swingDetector);
+            _logger.Info("  ✓ SwingDetector registrado");
 
             _logger.Info($"Total detectores registrados: {_detectors.Count}");
         }

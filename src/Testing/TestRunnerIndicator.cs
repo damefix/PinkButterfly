@@ -87,6 +87,18 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 fvgAdvancedTester.RunAllTests();
                 
                 Print("");
+                Print("");
+
+                // ============================================================
+                // SWING DETECTOR TESTS
+                // ============================================================
+                Print(">>> Ejecutando SwingDetector Tests...");
+                Print("");
+                
+                var swingTester = new SwingDetectorTests(Print);
+                swingTester.RunAllTests();
+                
+                Print("");
                 Print(">>> Todos los tests completados!");
                 Print("");
                 Print("==============================================");
