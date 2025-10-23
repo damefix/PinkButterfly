@@ -238,6 +238,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             _detectors.Add(swingDetector);
             _logger.Info("  ✓ SwingDetector registrado");
 
+            // FASE 4: DoubleDetector
+            var doubleDetector = new DoubleDetector();
+            doubleDetector.Initialize(_provider, _config, _logger);
+            _detectors.Add(doubleDetector);
+            _logger.Info("  ✓ DoubleDetector registrado");
+
             _logger.Info($"Total detectores registrados: {_detectors.Count}");
         }
 

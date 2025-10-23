@@ -99,6 +99,18 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 swingTester.RunAllTests();
                 
                 Print("");
+                Print("");
+
+                // ============================================================
+                // DOUBLE DETECTOR TESTS
+                // ============================================================
+                Print(">>> Ejecutando DoubleDetector Tests...");
+                Print("");
+                
+                var doubleTester = new DoubleDetectorTests(Print);
+                doubleTester.RunAllTests();
+                
+                Print("");
                 Print(">>> Todos los tests completados!");
                 Print("");
                 Print("==============================================");
