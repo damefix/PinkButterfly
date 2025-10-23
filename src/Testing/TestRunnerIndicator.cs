@@ -144,6 +144,24 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 var poiTester = new POIDetectorTests(Print);
                 poiTester.RunAllTests();
                 
+                // ============================================================
+                // LIQUIDITY VOID DETECTOR TESTS
+                // ============================================================
+                Print(">>> Ejecutando LiquidityVoidDetector Tests...");
+                Print("");
+                
+                var lvTester = new LiquidityVoidDetectorTests(Print);
+                lvTester.RunAllTests();
+                
+                // ============================================================
+                // LIQUIDITY GRAB DETECTOR TESTS
+                // ============================================================
+                Print(">>> Ejecutando LiquidityGrabDetector Tests...");
+                Print("");
+                
+                var lgTester = new LiquidityGrabDetectorTests(Print);
+                lgTester.RunAllTests();
+                
                 Print("");
                 Print(">>> Todos los tests completados!");
                 Print("");

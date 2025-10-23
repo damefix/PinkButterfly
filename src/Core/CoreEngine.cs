@@ -262,6 +262,20 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             _detectors.Add(poiDetector);
             _logger.Info("  ✓ POIDetector registrado");
 
+            // FASE 8: LiquidityVoidDetector (Zonas sin liquidez)
+            // NOTA: Se ejecuta DESPUÉS de SwingDetector (no depende de swings)
+            var lvDetector = new LiquidityVoidDetector();
+            lvDetector.Initialize(_provider, _config, _logger);
+            _detectors.Add(lvDetector);
+            _logger.Info("  ✓ LiquidityVoidDetector registrado");
+
+            // FASE 8: LiquidityGrabDetector (Stop Hunts)
+            // NOTA: Se ejecuta DESPUÉS de SwingDetector (depende de swings para detectar sweeps)
+            var lgDetector = new LiquidityGrabDetector();
+            lgDetector.Initialize(_provider, _config, _logger);
+            _detectors.Add(lgDetector);
+            _logger.Info("  ✓ LiquidityGrabDetector registrado");
+
             _logger.Info($"Total detectores registrados: {_detectors.Count}");
         }
 
@@ -676,6 +690,60 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     .OfType<PointOfInterestInfo>()
                     .Where(poi => poi.IsActive && poi.CompositeScore >= minScore)
                     .OrderByDescending(poi => poi.CompositeScore)
+                    .ToList();
+            }
+            finally
+            {
+                _stateLock.ExitReadLock();
+            }
+        }
+
+        /// <summary>
+        /// Obtiene Liquidity Voids (zonas sin liquidez)
+        /// </summary>
+        /// <param name="tfMinutes">Timeframe en minutos</param>
+        /// <param name="minScore">Score mínimo (0.0 - 1.0)</param>
+        /// <param name="includeF illed">Si true, incluye voids rellenados</param>
+        /// <returns>Lista de Liquidity Voids ordenados por score</returns>
+        public IReadOnlyList<LiquidityVoidInfo> GetLiquidityVoids(int tfMinutes, double minScore = 0.0, bool includeFilled = false)
+        {
+            _stateLock.EnterReadLock();
+            try
+            {
+                if (!_structuresListByTF.ContainsKey(tfMinutes))
+                    return new List<LiquidityVoidInfo>();
+
+                return _structuresListByTF[tfMinutes]
+                    .OfType<LiquidityVoidInfo>()
+                    .Where(lv => lv.IsActive && lv.Score >= minScore && (includeFilled || !lv.IsFilled))
+                    .OrderByDescending(lv => lv.Score)
+                    .ToList();
+            }
+            finally
+            {
+                _stateLock.ExitReadLock();
+            }
+        }
+
+        /// <summary>
+        /// Obtiene Liquidity Grabs (stop hunts / sweeps)
+        /// </summary>
+        /// <param name="tfMinutes">Timeframe en minutos</param>
+        /// <param name="minScore">Score mínimo (0.0 - 1.0)</param>
+        /// <param name="confirmedOnly">Si true, solo devuelve grabs con reversión confirmada</param>
+        /// <returns>Lista de Liquidity Grabs ordenados por score</returns>
+        public IReadOnlyList<LiquidityGrabInfo> GetLiquidityGrabs(int tfMinutes, double minScore = 0.0, bool confirmedOnly = false)
+        {
+            _stateLock.EnterReadLock();
+            try
+            {
+                if (!_structuresListByTF.ContainsKey(tfMinutes))
+                    return new List<LiquidityGrabInfo>();
+
+                return _structuresListByTF[tfMinutes]
+                    .OfType<LiquidityGrabInfo>()
+                    .Where(lg => lg.IsActive && lg.Score >= minScore && !lg.FailedGrab && (confirmedOnly == false || lg.ConfirmedReversal))
+                    .OrderByDescending(lg => lg.Score)
                     .ToList();
             }
             finally

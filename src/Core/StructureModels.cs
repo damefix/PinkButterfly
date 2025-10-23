@@ -318,5 +318,136 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// </summary>
         public bool IsPremium { get; set; } = false;
     }
+
+    /// <summary>
+    /// Liquidity Void (LV) - Zona de ineficiencia sin liquidez
+    /// Detectado cuando hay ausencia significativa de negociación entre dos velas
+    /// (gap sin solapamiento de mechas o con volumen extremadamente bajo)
+    /// </summary>
+    public class LiquidityVoidInfo : StructureBase
+    {
+        public LiquidityVoidInfo()
+        {
+            Type = "LIQUIDITY_VOID";
+        }
+
+        /// <summary>Dirección del void: "Bullish" o "Bearish"</summary>
+        public string Direction { get; set; }
+        
+        /// <summary>
+        /// Score de ineficiencia (0.0 - 1.0)
+        /// Combina la falta de solapamiento y la baja actividad de volumen/delta
+        /// </summary>
+        public double InefficiencyScore { get; set; } = 0.0;
+        
+        /// <summary>
+        /// Ratio de volumen relativo al promedio
+        /// Valores bajos (<0.4) indican mayor ineficiencia
+        /// </summary>
+        public double VolumeRatio { get; set; } = 0.0;
+        
+        /// <summary>
+        /// Indica si este void se ha rellenado completamente (100% del rango)
+        /// </summary>
+        public bool IsFilled { get; set; } = false;
+        
+        /// <summary>
+        /// Porcentaje de relleno del void (0.0 - 1.0)
+        /// 0.0 = no tocado, 1.0 = completamente rellenado
+        /// </summary>
+        public double FillPercentage { get; set; } = 0.0;
+        
+        /// <summary>
+        /// Indica si este void es parte de un Extended Liquidity Void
+        /// (fusión de múltiples voids consecutivos)
+        /// </summary>
+        public bool IsExtended { get; set; } = false;
+        
+        /// <summary>
+        /// ID del void padre si este es parte de un Extended Void
+        /// null si es un void independiente
+        /// </summary>
+        public string ParentVoidId { get; set; }
+        
+        /// <summary>
+        /// Tamaño del void en ticks
+        /// </summary>
+        public double SizeTicks { get; set; } = 0.0;
+    }
+
+    /// <summary>
+    /// Liquidity Grab (LG) - Stop Hunt / Sweep de liquidez
+    /// Movimiento brusco que supera un swing previo y revierte inmediatamente
+    /// Indica absorción de liquidez pasiva (stops) y posible reversión
+    /// </summary>
+    public class LiquidityGrabInfo : StructureBase
+    {
+        public LiquidityGrabInfo()
+        {
+            Type = "LIQUIDITY_GRAB";
+        }
+
+        /// <summary>
+        /// Tipo de liquidez capturada:
+        /// - "BuySide": Sweep de máximos (liquidez por encima)
+        /// - "SellSide": Sweep de mínimos (liquidez por debajo)
+        /// </summary>
+        public string DirectionalBias { get; set; }
+        
+        /// <summary>
+        /// Precio al que ocurrió el sweep (el extremo de la mecha)
+        /// </summary>
+        public double GrabPrice { get; set; }
+        
+        /// <summary>
+        /// Precio de cierre de la vela que hizo el sweep
+        /// </summary>
+        public double ClosePrice { get; set; }
+        
+        /// <summary>
+        /// ID del swing que fue barrido (sweep)
+        /// </summary>
+        public string RelatedSwingId { get; set; }
+        
+        /// <summary>
+        /// Volumen en el momento del grab
+        /// </summary>
+        public double VolumeAtGrab { get; set; } = 0.0;
+        
+        /// <summary>
+        /// Ratio de volumen relativo al promedio
+        /// Valores altos (>1.5) indican mayor fuerza del grab
+        /// </summary>
+        public double VolumeRatio { get; set; } = 0.0;
+        
+        /// <summary>
+        /// Indica si se confirmó la reversión
+        /// true si el precio cerró en dirección opuesta al sweep y no volvió a romper el GrabPrice
+        /// </summary>
+        public bool ConfirmedReversal { get; set; } = false;
+        
+        /// <summary>
+        /// Indica si el grab falló (el precio continuó en la dirección del sweep)
+        /// Marca un "TrueBreak" en lugar de un grab
+        /// </summary>
+        public bool FailedGrab { get; set; } = false;
+        
+        /// <summary>
+        /// Distancia del sweep más allá del swing (en ticks)
+        /// </summary>
+        public double SweepDistanceTicks { get; set; } = 0.0;
+        
+        /// <summary>
+        /// Fuerza del sweep (0.0 - 1.0)
+        /// Basado en el tamaño del cuerpo y rango de la vela vs ATR
+        /// </summary>
+        public double SweepStrength { get; set; } = 0.0;
+        
+        /// <summary>
+        /// Número de barras desde el grab
+        /// Usado para purga rápida (LG pierde relevancia rápidamente)
+        /// </summary>
+        public int BarsSinceGrab { get; set; } = 0;
+    }
 }
 

@@ -81,6 +81,36 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         }
 
         /// <summary>
+        /// Agrega una barra sintética con parámetros individuales (helper para tests)
+        /// Usa TF 60 por defecto y genera timestamp automático
+        /// </summary>
+        public void AddBar(double open, double high, double low, double close, double? volume)
+        {
+            int tfMinutes = 60; // TF por defecto
+            
+            lock (_lock)
+            {
+                if (!_barsByTF.ContainsKey(tfMinutes))
+                    _barsByTF[tfMinutes] = new List<MockBar>();
+
+                int barCount = _barsByTF[tfMinutes].Count;
+                DateTime time = new DateTime(2025, 1, 1, 0, 0, 0).AddMinutes(barCount * tfMinutes);
+
+                var bar = new MockBar
+                {
+                    Time = time,
+                    Open = open,
+                    High = high,
+                    Low = low,
+                    Close = close,
+                    Volume = volume
+                };
+
+                _barsByTF[tfMinutes].Add(bar);
+            }
+        }
+
+        /// <summary>
         /// Agrega múltiples barras sintéticas
         /// </summary>
         public void AddBars(int tfMinutes, IEnumerable<MockBar> bars)
