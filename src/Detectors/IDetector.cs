@@ -26,12 +26,13 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
     public interface IDetector
     {
         /// <summary>
-        /// Inicializa el detector con el proveedor de datos y configuración
+        /// Inicializa el detector con el proveedor de datos, configuración y logger
         /// Llamado una vez al inicio por el CoreEngine
         /// </summary>
         /// <param name="provider">Proveedor de datos de barras</param>
         /// <param name="config">Configuración del motor</param>
-        void Initialize(IBarDataProvider provider, EngineConfig config);
+        /// <param name="logger">Logger para mensajes del detector</param>
+        void Initialize(IBarDataProvider provider, EngineConfig config, ILogger logger);
 
         /// <summary>
         /// Método llamado cuando se cierra una barra en un timeframe específico
@@ -53,11 +54,6 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// Llamado cuando el motor se cierra
         /// </summary>
         void Dispose();
-
-        /// <summary>
-        /// Nombre del detector (para logging y debugging)
-        /// </summary>
-        string Name { get; }
     }
 }
 

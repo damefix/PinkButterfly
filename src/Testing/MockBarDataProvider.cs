@@ -342,7 +342,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 if (_atrCache.ContainsKey(cacheKey))
                     return _atrCache[cacheKey];
 
-                if (!_barsByTF.ContainsKey(tfMinutes) || barIndex < period)
+                if (!_barsByTF.ContainsKey(tfMinutes) || barIndex < period - 1)
                     return 0;
 
                 // Cálculo simplificado de ATR para mock

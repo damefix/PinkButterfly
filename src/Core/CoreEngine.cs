@@ -56,6 +56,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// <summary>Logger para debugging y errores</summary>
         private readonly ILogger _logger;
 
+        /// <summary>Motor de scoring para cálculo de puntuaciones</summary>
+        private readonly ScoringEngine _scoringEngine;
+
         /// <summary>Marca si ha habido cambios desde el último guardado</summary>
         private volatile bool _stateChanged;
 
@@ -172,6 +175,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             _lastSaveTime = DateTime.UtcNow;
             _saveCancellationTokenSource = new CancellationTokenSource();
 
+            // Inicializar motor de scoring
+            _scoringEngine = new ScoringEngine(_config, _provider, _logger);
+
             _logger.Info($"CoreEngine creado con {_config.TimeframesToUse.Count} timeframes: " +
                         $"[{string.Join(", ", _config.TimeframesToUse)}]");
         }
@@ -200,8 +206,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
             try
             {
-                // TODO Fase 2: Inicializar detectores
-                // InitializeDetectors();
+                // Inicializar detectores
+                InitializeDetectors();
 
                 _isInitialized = true;
                 _logger.Info("CoreEngine inicializado correctamente");
@@ -211,6 +217,27 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 _logger.Exception("Error durante inicialización del CoreEngine", ex);
                 throw;
             }
+        }
+
+        /// <summary>
+        /// Inicializa y registra los detectores de estructuras
+        /// </summary>
+        private void InitializeDetectors()
+        {
+            _logger.Info("Inicializando detectores...");
+
+            // FASE 2: FVGDetector
+            var fvgDetector = new FVGDetector();
+            fvgDetector.Initialize(_provider, _config, _logger);
+            _detectors.Add(fvgDetector);
+            _logger.Info("  ✓ FVGDetector registrado");
+
+            // FASE 3: Más detectores...
+            // var swingDetector = new SwingDetector();
+            // swingDetector.Initialize(_provider, _config, _logger);
+            // _detectors.Add(swingDetector);
+
+            _logger.Info($"Total detectores registrados: {_detectors.Count}");
         }
 
         // ========================================================================
@@ -286,6 +313,10 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 // Agregar a interval tree
                 _intervalTreesByTF[structure.TF].Insert(structure.Low, structure.High, structure);
 
+                // Calcular score inicial
+                int currentBarIndex = _provider.GetCurrentBarIndex(structure.TF);
+                structure.Score = _scoringEngine.CalculateScore(structure, currentBarIndex, _currentMarketBias);
+
                 _stateChanged = true;
 
                 if (_config.EnableDebug)
@@ -320,10 +351,15 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
                 // Actualizar referencia (ya está en las colecciones)
                 _structuresById[structure.Id] = structure;
+
+                // Recalcular score
+                int currentBarIndex = _provider.GetCurrentBarIndex(structure.TF);
+                structure.Score = _scoringEngine.CalculateScore(structure, currentBarIndex, _currentMarketBias);
+
                 _stateChanged = true;
 
                 if (_config.EnableDebug)
-                    _logger.Debug($"Estructura actualizada: {structure.Type} {structure.Id}");
+                    _logger.Debug($"Estructura actualizada: {structure.Type} {structure.Id} Score:{structure.Score:F3}");
 
                 // Disparar evento
                 OnStructureUpdated?.Invoke(structure);
