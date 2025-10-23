@@ -123,6 +123,17 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 orderBlockTester.RunAll();
                 
                 Print("");
+
+                // ============================================================
+                // BOS DETECTOR TESTS
+                // ============================================================
+                Print(">>> Ejecutando BOSDetector Tests...");
+                Print("");
+                
+                var bosTester = new BOSDetectorTests(Print);
+                bosTester.RunAllTests();
+                
+                Print("");
                 Print(">>> Todos los tests completados!");
                 Print("");
                 Print("==============================================");
