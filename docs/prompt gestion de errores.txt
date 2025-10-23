@@ -1,0 +1,48 @@
+Tras la exhaustiva especificación del **Core Engine** (estructuras SMC, scoring, persistencia, I/O asíncrono, concurrencia, etc.) y la arquitectura del **Decision Engine** (DFM, visualización, *publishing*, gestión de riesgo, SL/TP estructural), el proyecto está en un **estado de definición excepcionalmente completo** ($\mathbf{99\%}$).
+
+Sin embargo, para alcanzar el $\mathbf{100\%}$ de madurez profesional, hay tres áreas clave que, aunque mencionadas, merecen una **especificación formal y dedicada** dentro de la arquitectura de NinjaTrader: la **Gestión de Errores/Excepciones**, la **Telemetría/Monitoreo** y la **Gestión de Sesiones/Datos Históricos**.
+
+---
+
+## ?? Puntos Clave Olvidados o Insuficientemente Definidos
+
+### 1. Gestión Formal de Errores y Excepciones
+
+Aunque se ha hablado de `ILogger` y *warnings*, la arquitectura no define cómo el motor debe **reaccionar a los fallos catastróficos o transitorios** en tiempo real.
+
+| Módulo | Problema Potencial | Especificación Requerida |
+| :--- | :--- | :--- |
+| **I/O Asíncrono** | Fallo de escritura de JSON (`Task` falla). | El `PersistenceManager` debe tener un mecanismo de **reintento (retry)** con *backoff* exponencial y, si falla persistentemente, notificar al `ILogger` y al `DecisionEngine` para forzar un estado **`Error`** en el *snapshot*. |
+| **Concurrencia** | `Timeout` o *deadlock* en `ReaderWriterLockSlim`. | Implementar el *locking* con un `Timeout` (ej. 500 ms) en lugar de un *lock* indefinido. Si el tiempo expira, registrar un error crítico y seguir (fail-safe). |
+| **Detección de Datos** | `GetATR()` devuelve `NaN` o `IndexOutOfRangeException` (barra no disponible). | El `IBarDataProvider` debe incluir manejo de excepciones: si los datos no son válidos, devolver valores seguros o lanzar excepciones específicas (`DataUnavailableException`) que el *Detector* pueda capturar y **registrar sin detener la ejecución**. |
+| **Salida a Terceros** | Fallo de conexión del `WebSocketPublisher` o `TelegramPublisher`. | Los *Publishers* deben manejar la desconexión con **reconexión automática** y *buffering* de mensajes temporal para evitar la pérdida de *snapshots*. |
+
+---
+
+### 2. Telemetría y Monitoreo (Engine Stats)
+
+El DFM necesita exponer métricas de rendimiento interno (KPIs) para asegurar que se cumplen los límites de latencia (`< 200ms`).
+
+| Módulo | Métrica Requerida | Formato/Destino |
+| :--- | :--- | :--- |
+| **Decision Engine** | **`AvgProcessingLatencyMs`:** Latencia promedio de la ejecución de `GenerateDecisions`. | Campo en `DecisionSnapshot.Summary` y `ILogger` (Info). |
+| **Core Engine** | **`StructuresCountByTF`:** Número de estructuras activas por TF (para monitorear la purga). | Expuesto en un método público del *Core* y registrado periódicamente. |
+| **Concurrencia** | **`LockContentionCount`:** Contador de intentos fallidos de adquirir *lock* (si se usa la versión con *timeout*). | `ILogger` (Debug/Info). Alto *contention* indica un cuello de botella. |
+| **Modelos Adaptativos** | **`InferenceTimeMs`:** Latencia de la predicción del DFM adaptativo. | Campo en `DecisionSnapshot.DebugInfo`. |
+
+**Propuesta:** Crear una clase `EngineTelemetry` para centralizar la recolección de todas estas métricas en ambos motores (Core y Decision).
+
+---
+
+### 3. Gestión del Contexto Histórico y Sesiones
+
+El sistema debe saber diferenciar entre datos en tiempo real y datos históricos, y manejar correctamente los *roll-overs* o cambios de sesión (ej. mercado *overnight*).
+
+| Módulo | Problema Potencial | Especificación Requerida |
+| :--- | :--- | :--- |
+| **IBarDataProvider** | Datos históricos vs. *Real-Time* (RTH/ETH). | El *Provider* debe exponer un *flag* o método: `bool IsHistoricalData()`. Los **Detectores** deben usar esto para **ajustar el *scoring*** (ej., dar menos peso a estructuras detectadas en el *backfill* o ignorar *gaps* de sesiones cerradas). |
+| **Trade Decision** | Decisión durante la noche. | Añadir un *hard constraint* en `DecisionConfig`: `DisableTradingOutsideRTH` (bool). Si es `true`, el DFM solo genera `Action="WAIT"` fuera del horario de mercado regular. |
+| **Recalculación de Estado** | Recarga de estado desde JSON. | Si el `LoadStateFromJSON` se realiza exitosamente, el *Core Engine* debe ejecutar un **`RecalculateRecentBars(N)`** para las últimas $N$ barras. Esto asegura que el estado recién cargado esté actualizado con la acción de precio más reciente. |
+| **Purga de Estructuras** | Mantenimiento de memoria a largo plazo. | Además de la purga por *score*, añadir una purga por **`MaxAgeDays`** (ej. 90 días) para liberar estructuras muy antiguas, incluso si tienen un *score* residual bajo. |
+
+Al abordar estos tres puntos de **Gestión de Errores/Telemetría/Contexto**, el sistema será no solo predictivo, sino también **operativamente seguro, auditable y mantenible** a largo plazo en un entorno *live*.

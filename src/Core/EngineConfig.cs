@@ -288,6 +288,139 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         public int POI_PremiumLookbackBars { get; set; } = 50;
 
         // ========================================================================
+        // PARÁMETROS LIQUIDITY VOIDS (LV)
+        // ========================================================================
+        
+        /// <summary>
+        /// Si true, requiere que el void tenga bajo volumen para ser detectado
+        /// Si false, ignora la validación de volumen (más permisivo)
+        /// </summary>
+        public bool LV_RequireLowVolume { get; set; } = false;
+        
+        /// <summary>
+        /// Threshold de volumen para considerar un void (como factor del volumen promedio)
+        /// Ejemplo: 0.4 = volumen debe ser menor a 40% del promedio para ser void
+        /// Solo aplica si LV_RequireLowVolume = true
+        /// </summary>
+        public double LV_VolumeThreshold { get; set; } = 0.4;
+        
+        /// <summary>
+        /// Período para calcular el volumen promedio
+        /// Usado para detectar zonas de bajo volumen
+        /// </summary>
+        public int LV_VolumeAvgPeriod { get; set; } = 20;
+        
+        /// <summary>
+        /// Tamaño mínimo del void como factor del ATR
+        /// Ejemplo: 0.15 = void debe ser al menos 15% del ATR
+        /// </summary>
+        public double LV_MinSizeATRFactor { get; set; } = 0.15;
+        
+        /// <summary>
+        /// Habilita la fusión de voids consecutivos que se solapan
+        /// true = fusionar en Extended Liquidity Voids
+        /// </summary>
+        public bool LV_EnableFusion { get; set; } = true;
+        
+        /// <summary>
+        /// Tolerancia para fusionar voids (como factor del ATR)
+        /// Ejemplo: 0.3 = voids a menos de 0.3 * ATR se fusionan
+        /// </summary>
+        public double LV_FusionToleranceATR { get; set; } = 0.3;
+        
+        /// <summary>
+        /// Threshold de relleno para considerar un void como "filled"
+        /// Ejemplo: 0.95 = 95% del rango debe ser rellenado
+        /// </summary>
+        public double LV_FillThreshold { get; set; } = 0.95;
+        
+        /// <summary>
+        /// Peso del tamaño relativo en el scoring del void
+        /// </summary>
+        public double LV_SizeWeight { get; set; } = 0.4;
+        
+        /// <summary>
+        /// Peso de la profundidad del hueco (volumen) en el scoring
+        /// </summary>
+        public double LV_DepthWeight { get; set; } = 0.3;
+        
+        /// <summary>
+        /// Peso de la proximidad al precio actual en el scoring
+        /// </summary>
+        public double LV_ProximityWeight { get; set; } = 0.2;
+        
+        /// <summary>
+        /// Multiplicador cuando el void confluye con FVG/OB
+        /// Ejemplo: 1.3 = 30% de bonus por confluencia
+        /// </summary>
+        public double LV_ConfluenceMultiplier { get; set; } = 1.3;
+
+        // ========================================================================
+        // PARÁMETROS LIQUIDITY GRABS (LG)
+        // ========================================================================
+        
+        /// <summary>
+        /// Threshold de cuerpo para considerar un grab (como factor del ATR)
+        /// Ejemplo: 0.6 = cuerpo debe ser al menos 60% del ATR
+        /// </summary>
+        public double LG_BodyThreshold { get; set; } = 0.6;
+        
+        /// <summary>
+        /// Threshold de rango para considerar un grab (como factor del ATR)
+        /// Ejemplo: 1.2 = rango total debe ser al menos 120% del ATR
+        /// </summary>
+        public double LG_RangeThreshold { get; set; } = 1.2;
+        
+        /// <summary>
+        /// Factor de volumen para confirmación de grab
+        /// Ejemplo: 1.5 = volumen debe ser 1.5x el promedio
+        /// </summary>
+        public double LG_VolumeSpikeFactor { get; set; } = 1.5;
+        
+        /// <summary>
+        /// Período para calcular el volumen promedio
+        /// </summary>
+        public int LG_VolumeAvgPeriod { get; set; } = 20;
+        
+        /// <summary>
+        /// Número máximo de barras para confirmar reversión después del grab
+        /// Si no revierte en N barras, se marca como FailedGrab
+        /// </summary>
+        public int LG_MaxBarsForReversal { get; set; } = 3;
+        
+        /// <summary>
+        /// Edad máxima en barras para un grab (purga rápida)
+        /// Los grabs pierden relevancia rápidamente si no son retesteados
+        /// </summary>
+        public int LG_MaxAgeBars { get; set; } = 20;
+        
+        /// <summary>
+        /// Peso de la fuerza del sweep en el scoring
+        /// </summary>
+        public double LG_SweepStrengthWeight { get; set; } = 0.3;
+        
+        /// <summary>
+        /// Peso del volumen en el scoring
+        /// </summary>
+        public double LG_VolumeWeight { get; set; } = 0.25;
+        
+        /// <summary>
+        /// Peso de la confirmación de reversión en el scoring
+        /// </summary>
+        public double LG_ReversalWeight { get; set; } = 0.3;
+        
+        /// <summary>
+        /// Peso del contexto de bias en el scoring
+        /// </summary>
+        public double LG_BiasWeight { get; set; } = 0.15;
+        
+        /// <summary>
+        /// Multiplicador de confianza cuando un grab se usa en setup de reversión
+        /// Ejemplo: 1.3 = 30% de bonus en el Decision Fusion Model
+        /// </summary>
+        public double LG_ReversalSetupMultiplier { get; set; } = 1.3;
+
+        // ========================================================================
         // CONFIGURACIÓN DE SISTEMA
         // ========================================================================
         
