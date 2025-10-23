@@ -134,6 +134,17 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 bosTester.RunAllTests();
                 
                 Print("");
+
+                // ============================================================
+                // POI DETECTOR TESTS
+                // ============================================================
+                Print(">>> Ejecutando POIDetector Tests...");
+                Print("");
+                
+                var poiTester = new POIDetectorTests(Print);
+                poiTester.RunAllTests();
+                
+                Print("");
                 Print(">>> Todos los tests completados!");
                 Print("");
                 Print("==============================================");

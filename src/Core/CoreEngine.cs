@@ -256,6 +256,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             _detectors.Add(bosDetector);
             _logger.Info("  ✓ BOSDetector registrado");
 
+            // FASE 7: POIDetector (Points of Interest - Confluencias)
+            var poiDetector = new POIDetector();
+            poiDetector.Initialize(_provider, _config, _logger);
+            _detectors.Add(poiDetector);
+            _logger.Info("  ✓ POIDetector registrado");
+
             _logger.Info($"Total detectores registrados: {_detectors.Count}");
         }
 
@@ -668,7 +674,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
                 return _structuresListByTF[tfMinutes]
                     .OfType<PointOfInterestInfo>()
-                    .Where(poi => poi.IsActive && poi.Score >= minScore)
+                    .Where(poi => poi.IsActive && poi.CompositeScore >= minScore)
                     .OrderByDescending(poi => poi.CompositeScore)
                     .ToList();
             }

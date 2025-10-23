@@ -247,6 +247,47 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         public int MaxRecentBreaksForBias { get; set; } = 10;
 
         // ========================================================================
+        // PARÁMETROS POI (POINTS OF INTEREST)
+        // ========================================================================
+        
+        /// <summary>
+        /// Tolerancia de overlap para considerar confluencia (como factor del ATR)
+        /// Ejemplo: 0.5 = estructuras a menos de 0.5 * ATR se consideran en confluencia
+        /// </summary>
+        public double OverlapToleranceATR { get; set; } = 0.5;
+        
+        /// <summary>
+        /// Número mínimo de estructuras para crear un POI
+        /// Default: 2 (al menos 2 estructuras deben confluir)
+        /// </summary>
+        public int MinStructuresForPOI { get; set; } = 2;
+        
+        /// <summary>
+        /// Bonus por cada estructura adicional en la confluencia
+        /// Ejemplo: 0.15 = cada estructura suma 15% al score compuesto
+        /// </summary>
+        public double POI_ConfluenceBonus { get; set; } = 0.15;
+        
+        /// <summary>
+        /// Máximo bonus por confluencia (para evitar scores excesivos)
+        /// Ejemplo: 0.5 = máximo 50% de bonus por confluencia
+        /// </summary>
+        public double POI_MaxConfluenceBonus { get; set; } = 0.5;
+        
+        /// <summary>
+        /// Threshold para considerar un POI como "Premium" (0.0 - 1.0)
+        /// 0.618 = 61.8% (nivel de Fibonacci) - POIs por encima son Premium
+        /// POIs por debajo son Discount
+        /// </summary>
+        public double POI_PremiumThreshold { get; set; } = 0.618;
+        
+        /// <summary>
+        /// Número de barras hacia atrás para calcular el rango del mercado
+        /// Usado para determinar si un POI es Premium o Discount
+        /// </summary>
+        public int POI_PremiumLookbackBars { get; set; } = 50;
+
+        // ========================================================================
         // CONFIGURACIÓN DE SISTEMA
         // ========================================================================
         
