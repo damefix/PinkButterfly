@@ -244,6 +244,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             _detectors.Add(doubleDetector);
             _logger.Info("  ✓ DoubleDetector registrado");
 
+            // FASE 5: OrderBlockDetector
+            var orderBlockDetector = new OrderBlockDetector();
+            orderBlockDetector.Initialize(_provider, _config, _logger);
+            _detectors.Add(orderBlockDetector);
+            _logger.Info("  ✓ OrderBlockDetector registrado");
+
             _logger.Info($"Total detectores registrados: {_detectors.Count}");
         }
 
@@ -481,6 +487,25 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     query = query.Where(d => d.Status == status);
 
                 return query.OrderByDescending(d => d.Score).ToList();
+            }
+            finally
+            {
+                _stateLock.ExitReadLock();
+            }
+        }
+
+        /// <summary>
+        /// Obtiene TODAS las estructuras en un timeframe (sin filtros)
+        /// </summary>
+        public IReadOnlyList<StructureBase> GetAllStructures(int tfMinutes)
+        {
+            _stateLock.EnterReadLock();
+            try
+            {
+                if (!_structuresListByTF.ContainsKey(tfMinutes))
+                    return new List<StructureBase>();
+
+                return _structuresListByTF[tfMinutes].ToList();
             }
             finally
             {

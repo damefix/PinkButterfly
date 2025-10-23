@@ -247,6 +247,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// Indica si el OB ha sido mitigado (precio retornó a la zona)
         /// </summary>
         public bool IsMitigated { get; set; } = false;
+        
+        /// <summary>
+        /// Indica si el precio ha salido de la zona del OB
+        /// Necesario para detectar correctamente la mitigación (retorno a la zona)
+        /// </summary>
+        public bool HasLeftZone { get; set; } = false;
     }
 
     /// <summary>
