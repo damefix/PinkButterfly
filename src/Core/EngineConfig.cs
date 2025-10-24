@@ -421,8 +421,19 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         public double LG_ReversalSetupMultiplier { get; set; } = 1.3;
 
         // ========================================================================
-        // CONFIGURACIÓN DE SISTEMA
+        // CONFIGURACIÓN DE SISTEMA - PERSISTENCIA
         // ========================================================================
+        
+        /// <summary>
+        /// Ruta del archivo de estado JSON
+        /// Por defecto: Documents/NinjaTrader 8/PinkButterfly/brain_state.json
+        /// </summary>
+        public string StateFilePath { get; set; } = "Documents/NinjaTrader 8/PinkButterfly/brain_state.json";
+        
+        /// <summary>
+        /// Habilita el guardado automático del estado
+        /// </summary>
+        public bool AutoSaveEnabled { get; set; } = true;
         
         /// <summary>
         /// Intervalo en segundos para guardado automático del estado
@@ -431,10 +442,76 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         public int StateSaveIntervalSecs { get; set; } = 30;
         
         /// <summary>
+        /// Valida que el hash de configuración coincida al cargar estado
+        /// Si es false, carga el estado sin validar (útil para migración)
+        /// </summary>
+        public bool ValidateConfigHashOnLoad { get; set; } = true;
+        
+        // ========================================================================
+        // CONFIGURACIÓN DE SISTEMA - PURGA Y LÍMITES
+        // ========================================================================
+        
+        /// <summary>
+        /// Habilita la purga automática de estructuras
+        /// Si es false, no se ejecuta ninguna purga (útil para tests)
+        /// </summary>
+        public bool EnableAutoPurge { get; set; } = false;
+        
+        /// <summary>
         /// Máximo número de estructuras por timeframe
         /// Cuando se excede, se purgan las estructuras con score más bajo
         /// </summary>
         public int MaxStructuresPerTF { get; set; } = 500;
+        
+        /// <summary>
+        /// Score mínimo para mantener una estructura (0.0 - 1.0)
+        /// Estructuras con score menor se purgan automáticamente
+        /// </summary>
+        public double MinScoreThreshold { get; set; } = 0.1;
+        
+        /// <summary>
+        /// Edad máxima en barras para purgar estructuras inactivas
+        /// Estructuras más antiguas se purgan si no son relevantes
+        /// </summary>
+        public int MaxAgeBarsForPurge { get; set; } = 500;
+        
+        /// <summary>
+        /// Habilita purga agresiva para Liquidity Grabs
+        /// Los LG pierden relevancia rápidamente (ya tienen LG_MaxAgeBars)
+        /// </summary>
+        public bool EnableAggressivePurgeForLG { get; set; } = true;
+        
+        // ========================================================================
+        // CONFIGURACIÓN DE SISTEMA - LÍMITES POR TIPO
+        // ========================================================================
+        
+        /// <summary>Máximo número de FVGs por timeframe</summary>
+        public int MaxStructuresByType_FVG { get; set; } = 100;
+        
+        /// <summary>Máximo número de Order Blocks por timeframe</summary>
+        public int MaxStructuresByType_OB { get; set; } = 80;
+        
+        /// <summary>Máximo número de Swings por timeframe</summary>
+        public int MaxStructuresByType_Swing { get; set; } = 150;
+        
+        /// <summary>Máximo número de BOS/CHoCH por timeframe</summary>
+        public int MaxStructuresByType_BOS { get; set; } = 50;
+        
+        /// <summary>Máximo número de POIs por timeframe</summary>
+        public int MaxStructuresByType_POI { get; set; } = 60;
+        
+        /// <summary>Máximo número de Liquidity Voids por timeframe</summary>
+        public int MaxStructuresByType_LV { get; set; } = 40;
+        
+        /// <summary>Máximo número de Liquidity Grabs por timeframe</summary>
+        public int MaxStructuresByType_LG { get; set; } = 30;
+        
+        /// <summary>Máximo número de Double Tops/Bottoms por timeframe</summary>
+        public int MaxStructuresByType_Double { get; set; } = 40;
+        
+        // ========================================================================
+        // CONFIGURACIÓN DE SISTEMA - GENERAL
+        // ========================================================================
         
         /// <summary>
         /// Activa logs de debug en NinjaTrader Output window
