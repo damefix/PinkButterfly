@@ -163,6 +163,17 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 lgTester.RunAllTests();
                 
                 Print("");
+                
+                // ============================================================
+                // FASE 9 TESTS (PERSISTENCIA Y OPTIMIZACIÓN)
+                // ============================================================
+                Print(">>> Ejecutando Fase 9 Tests (Persistencia, Purga, Debounce, Diagnósticos)...");
+                Print("");
+                
+                var fase9Tester = new Fase9Tests(Print);
+                fase9Tester.RunAllTests();
+                
+                Print("");
                 Print(">>> Todos los tests completados!");
                 Print("");
                 Print("==============================================");

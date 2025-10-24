@@ -59,6 +59,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// <summary>Motor de scoring para cálculo de puntuaciones</summary>
         private readonly ScoringEngine _scoringEngine;
 
+        /// <summary>Gestor de persistencia para save/load JSON</summary>
+        private readonly PersistenceManager _persistenceManager;
+
         /// <summary>Marca si ha habido cambios desde el último guardado</summary>
         private volatile bool _stateChanged;
 
@@ -70,6 +73,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
         /// <summary>Timestamp del último guardado</summary>
         private DateTime _lastSaveTime;
+
+        /// <summary>Estadísticas del motor (detecciones, purgas, performance)</summary>
+        private EngineStats _stats;
 
         /// <summary>
         /// Bias de mercado actual: "Bullish", "Bearish", "Neutral"
@@ -177,6 +183,17 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
             // Inicializar motor de scoring
             _scoringEngine = new ScoringEngine(_config, _provider, _logger);
+
+            // Inicializar gestor de persistencia
+            _persistenceManager = new PersistenceManager(_config, _logger);
+
+            // Inicializar estadísticas
+            _stats = new EngineStats
+            {
+                EngineVersion = _config.EngineVersion,
+                Instrument = "Unknown", // Se actualizará en Initialize()
+                IsInitialized = false
+            };
 
             _logger.Info($"CoreEngine creado con {_config.TimeframesToUse.Count} timeframes: " +
                         $"[{string.Join(", ", _config.TimeframesToUse)}]");
@@ -311,8 +328,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 // Actualizar scores de estructuras afectadas por proximidad
                 UpdateProximityScores(tfMinutes);
 
-                // Purgar estructuras antiguas si se excede el límite
+                // Purgar estructuras antiguas si está habilitado
+                if (_config.EnableAutoPurge)
+                {
                 PurgeOldStructuresIfNeeded(tfMinutes);
+                    PurgeAggressiveLiquidityGrabs(tfMinutes);
+                }
 
                 // Programar guardado asíncrono si hay cambios
                 ScheduleSaveIfNeeded();
@@ -496,6 +517,20 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             _stateLock.EnterWriteLock();
             try
             {
+                return RemoveStructureInternal(id);
+            }
+            finally
+            {
+                _stateLock.ExitWriteLock();
+            }
+        }
+
+        /// <summary>
+        /// Elimina una estructura por ID (versión interna sin lock)
+        /// SOLO usar cuando ya se tiene WriteLock
+        /// </summary>
+        private bool RemoveStructureInternal(string id)
+            {
                 if (!_structuresById.TryGetValue(id, out var structure))
                     return false;
 
@@ -517,11 +552,6 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 OnStructureRemoved?.Invoke(structure);
 
                 return true;
-            }
-            finally
-            {
-                _stateLock.ExitWriteLock();
-            }
         }
 
         // ========================================================================
@@ -845,54 +875,333 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         }
 
         // ========================================================================
-        // PERSISTENCIA (Skeleton - se implementará en Fase 5)
+        // PERSISTENCIA - IMPLEMENTACIÓN COMPLETA (FASE 9)
         // ========================================================================
 
         /// <summary>
         /// Guarda el estado completo a JSON de forma asíncrona
+        /// Usa el path configurado en EngineConfig.StateFilePath si no se especifica
         /// </summary>
-        public Task SaveStateToJSONAsync(string path)
+        public async Task SaveStateToJSONAsync(string path = null)
         {
-            _logger.Info($"SaveStateToJSONAsync: {path} (TODO Fase 5)");
-            return Task.CompletedTask;
+            if (!_config.AutoSaveEnabled && path == null)
+            {
+                _logger.Info("AutoSave deshabilitado - guardado omitido");
+                return;
+            }
+
+            string filePath = path ?? _config.StateFilePath;
+
+            try
+            {
+                _logger.Info($"Iniciando guardado de estado a: {filePath}");
+
+                // Actualizar estadísticas antes de guardar
+                UpdateEngineStats();
+
+                // Copiar estructuras con read lock (minimizar tiempo de bloqueo)
+                Dictionary<int, List<StructureBase>> structuresCopy;
+                string currentBias;
+
+                _stateLock.EnterReadLock();
+                try
+                {
+                    // Crear copia profunda de estructuras
+                    structuresCopy = new Dictionary<int, List<StructureBase>>();
+                    foreach (var kv in _structuresListByTF)
+                    {
+                        structuresCopy[kv.Key] = new List<StructureBase>(kv.Value);
+                    }
+                    currentBias = _currentMarketBias;
+                }
+                finally
+                {
+                    _stateLock.ExitReadLock();
+                }
+
+                // Guardar (fuera del lock para no bloquear el motor)
+                await _persistenceManager.SaveStateToFileAsync(
+                    structuresCopy,
+                    _stats.Instrument,
+                    currentBias,
+                    _stats,
+                    filePath
+                ).ConfigureAwait(false);
+
+                // Actualizar estadísticas de guardado
+                _lastSaveTime = DateTime.UtcNow;
+                _stateChanged = false;
+                _stats.LastSaveTime = _lastSaveTime;
+                _stats.LastSaveSuccessful = true;
+                _stats.LastSaveError = null;
+                _stats.TotalSavesSinceStart++;
+
+                _logger.Info($"Estado guardado exitosamente: {filePath}");
+            }
+            catch (Exception ex)
+            {
+                _logger.Exception($"Error guardando estado a {filePath}", ex);
+                
+                _stats.LastSaveSuccessful = false;
+                _stats.LastSaveError = ex.Message;
+                
+                throw;
+            }
         }
 
         /// <summary>
         /// Carga el estado desde JSON
+        /// Usa el path configurado en EngineConfig.StateFilePath si no se especifica
         /// </summary>
-        public void LoadStateFromJSON(string path)
+        /// <param name="path">Ruta del archivo (opcional, usa StateFilePath si es null)</param>
+        /// <param name="forceLoad">Si true, carga sin validar hash de configuración</param>
+        public void LoadStateFromJSON(string path = null, bool forceLoad = false)
         {
-            _logger.Info($"LoadStateFromJSON: {path} (TODO Fase 5)");
+            string filePath = path ?? _config.StateFilePath;
+
+            try
+            {
+                _logger.Info($"Iniciando carga de estado desde: {filePath}");
+
+                // Verificar si el archivo existe
+                if (!_persistenceManager.StateFileExists(filePath))
+                {
+                    _logger.Warning($"Archivo de estado no encontrado: {filePath} - iniciando con estado vacío");
+                    return;
+                }
+
+                // Cargar estado
+                var state = _persistenceManager.LoadStateFromFile(filePath, forceLoad);
+
+                if (state == null)
+                {
+                    _logger.Warning("Estado cargado es null - iniciando con estado vacío");
+                    return;
+                }
+
+                // Aplicar estado al motor
+                _stateLock.EnterWriteLock();
+                try
+                {
+                    // Limpiar estado actual
+                    _structuresListByTF.Clear();
+                    _intervalTreesByTF.Clear();
+                    _structuresById.Clear();
+
+                    // Reinicializar estructuras por timeframe
+                    foreach (var tf in _config.TimeframesToUse)
+                    {
+                        _structuresListByTF[tf] = new List<StructureBase>();
+                        _intervalTreesByTF[tf] = new IntervalTree<StructureBase>();
+                    }
+
+                    // Cargar estructuras
+                    int totalLoaded = 0;
+                    foreach (var kv in state.StructuresByTF)
+                    {
+                        int tfMinutes = kv.Key;
+                        var structures = kv.Value;
+
+                        // Verificar que el TF esté configurado
+                        if (!_config.TimeframesToUse.Contains(tfMinutes))
+                        {
+                            _logger.Warning($"TF {tfMinutes} no está en TimeframesToUse - omitiendo {structures.Count} estructuras");
+                            continue;
+                        }
+
+                        foreach (var structure in structures)
+                        {
+                            // Añadir a lista
+                            _structuresListByTF[tfMinutes].Add(structure);
+
+                            // Añadir a índice espacial
+                            _intervalTreesByTF[tfMinutes].Insert(structure.Low, structure.High, structure);
+
+                            // Añadir a diccionario por ID
+                            _structuresById[structure.Id] = structure;
+
+                            totalLoaded++;
+                        }
+                    }
+
+                    // Restaurar bias
+                    _currentMarketBias = state.CurrentMarketBias ?? "Neutral";
+
+                    // Restaurar estadísticas si están disponibles
+                    if (state.Stats != null)
+                    {
+                        _stats = state.Stats;
+                        _stats.IsInitialized = _isInitialized;
+                    }
+
+                    _stateChanged = false;
+
+                    _logger.Info($"Estado cargado: {totalLoaded} estructuras, Bias={_currentMarketBias}");
+                }
+                finally
+                {
+                    _stateLock.ExitWriteLock();
+                }
+
+                // Actualizar estadísticas de carga
+                _stats.LastLoadTime = DateTime.UtcNow;
+                _stats.LastLoadSuccessful = true;
+                _stats.LastLoadError = null;
+                _stats.TotalLoadsSinceStart++;
+                _stats.CurrentConfigHash = _config.GetHash();
+                _stats.LoadedConfigHash = state.EngineConfigHash;
+                _stats.ConfigHashMatched = (_stats.CurrentConfigHash == _stats.LoadedConfigHash);
+
+                _logger.Info($"Carga completada exitosamente desde: {filePath}");
+            }
+            catch (Exception ex)
+            {
+                _logger.Exception($"Error cargando estado desde {filePath}", ex);
+                
+                _stats.LastLoadSuccessful = false;
+                _stats.LastLoadError = ex.Message;
+                
+                throw;
+            }
         }
 
         /// <summary>
         /// Programa un guardado asíncrono si hay cambios y ha pasado el intervalo
+        /// Implementa debounce para evitar guardados excesivos
         /// </summary>
         private void ScheduleSaveIfNeeded()
         {
-            // TODO Fase 5: Implementar debounce y guardado asíncrono
+            // Si no hay cambios o el auto-save está deshabilitado, salir
+            if (!_stateChanged || !_config.AutoSaveEnabled)
+                return;
+
+            // Verificar si ha pasado el intervalo desde el último guardado
+            var timeSinceLastSave = (DateTime.UtcNow - _lastSaveTime).TotalSeconds;
+            if (timeSinceLastSave < _config.StateSaveIntervalSecs)
+                return;
+
+            // Si ya hay una tarea de guardado en progreso, salir
+            if (_saveTask != null && !_saveTask.IsCompleted)
+            {
+                _logger.Debug("Guardado ya en progreso - omitiendo");
+                return;
+            }
+
+            // Iniciar guardado asíncrono
+            _logger.Debug($"Programando guardado (cambios detectados, {timeSinceLastSave:F1}s desde último guardado)");
+
+            _saveTask = Task.Run(async () =>
+            {
+                try
+                {
+                    await SaveStateToJSONAsync().ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.Exception("Error en guardado asíncrono programado", ex);
+                }
+            }, _saveCancellationTokenSource.Token);
         }
 
         // ========================================================================
-        // DIAGNÓSTICOS (Skeleton - se implementará en Fase 2)
+        // DIAGNÓSTICOS - IMPLEMENTACIÓN COMPLETA (FASE 9)
         // ========================================================================
 
         /// <summary>
         /// Ejecuta diagnósticos sintéticos del sistema
-        /// Genera escenarios de prueba y valida detección correcta
+        /// Valida inicialización, estadísticas, persistencia, purga, thread-safety y performance
         /// </summary>
-        public void RunSelfDiagnostics()
+        /// <returns>Reporte de diagnósticos con resultados de todos los tests</returns>
+        public DiagnosticReport RunSelfDiagnostics()
         {
-            _logger.Info("RunSelfDiagnostics() - TODO Fase 2");
+            _logger.Info("Ejecutando diagnósticos del sistema...");
+
+            var diagnostics = new Diagnostics(this, _provider, _logger);
+            var report = diagnostics.RunAllDiagnostics();
+
+            _logger.Info($"Diagnósticos completados: {report.PassedTests}/{report.TotalTests} tests pasados ({report.PassRate:F1}%)");
+
+            return report;
         }
 
         // ========================================================================
-        // MANTENIMIENTO
+        // ESTADÍSTICAS
+        // ========================================================================
+
+        /// <summary>
+        /// Obtiene las estadísticas actuales del motor
+        /// </summary>
+        public EngineStats GetEngineStats()
+        {
+            UpdateEngineStats();
+            return _stats;
+        }
+
+        /// <summary>
+        /// Actualiza las estadísticas del motor con datos actuales
+        /// </summary>
+        private void UpdateEngineStats()
+        {
+            _stateLock.EnterReadLock();
+            try
+            {
+                _stats.GeneratedAt = DateTime.UtcNow;
+                _stats.IsInitialized = _isInitialized;
+                _stats.CurrentMarketBias = _currentMarketBias;
+
+                // Total de estructuras
+                _stats.TotalStructures = _structuresById.Count;
+                _stats.TotalActiveStructures = _structuresById.Values.Count(s => s.IsActive);
+                _stats.TotalCompletedStructures = _structuresById.Values.Count(s => s.IsCompleted);
+
+                // Estructuras por tipo
+                _stats.StructuresByType.Clear();
+                foreach (var structure in _structuresById.Values)
+                {
+                    if (!_stats.StructuresByType.ContainsKey(structure.Type))
+                        _stats.StructuresByType[structure.Type] = 0;
+                    
+                    _stats.StructuresByType[structure.Type]++;
+                }
+
+                // Estructuras por TF
+                _stats.StructuresByTF.Clear();
+                foreach (var kv in _structuresListByTF)
+                {
+                    _stats.StructuresByTF[kv.Key] = kv.Value.Count;
+                }
+
+                // Scores
+                if (_structuresById.Count > 0)
+                {
+                    var scores = _structuresById.Values.Select(s => s.Score).ToList();
+                    _stats.AverageScore = scores.Average();
+                    _stats.MaxScore = scores.Max();
+                    _stats.MinScore = scores.Min();
+                }
+                else
+                {
+                    _stats.AverageScore = 0;
+                    _stats.MaxScore = 0;
+                    _stats.MinScore = 0;
+                }
+
+                // Memoria estimada (aproximación)
+                _stats.EstimatedMemoryBytes = _structuresById.Count * 1024; // ~1KB por estructura (estimación conservadora)
+            }
+            finally
+            {
+                _stateLock.ExitReadLock();
+            }
+        }
+
+        // ========================================================================
+        // MANTENIMIENTO Y PURGA INTELIGENTE (FASE 9)
         // ========================================================================
 
         /// <summary>
         /// Purga estructuras antiguas cuando se excede MaxStructuresPerTF
-        /// Elimina estructuras con score más bajo primero
+        /// Implementa purga inteligente por score, edad y tipo
         /// </summary>
         private void PurgeOldStructuresIfNeeded(int tfMinutes)
         {
@@ -900,6 +1209,79 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             try
             {
                 var structures = _structuresListByTF[tfMinutes];
+                int currentBar = _provider.GetCurrentBarIndex(tfMinutes);
+                
+                // 1. Purga por score mínimo (prioridad alta)
+                // Purgar TODAS las estructuras con score bajo (sin importar estado)
+                // Una estructura con score < threshold no aporta valor al sistema
+                var lowScoreStructures = structures
+                    .Where(s => s.Score < _config.MinScoreThreshold)
+                    .ToList();
+
+                if (lowScoreStructures.Count > 0)
+                {
+                    _stateLock.EnterWriteLock();
+                    try
+                    {
+                        foreach (var structure in lowScoreStructures)
+                        {
+                            RemoveStructureInternal(structure.Id);
+                            
+                            // Actualizar estadísticas
+                            _stats.TotalPurgedSinceStart++;
+                            if (!_stats.PurgedByType.ContainsKey(structure.Type))
+                                _stats.PurgedByType[structure.Type] = 0;
+                            _stats.PurgedByType[structure.Type]++;
+                        }
+
+                        _stats.LastPurgeTime = DateTime.UtcNow;
+                        _stats.LastPurgeCount = lowScoreStructures.Count;
+
+                        _logger.Info($"Purgadas {lowScoreStructures.Count} estructuras de TF:{tfMinutes} por score bajo (< {_config.MinScoreThreshold})");
+                    }
+                    finally
+                    {
+                        _stateLock.ExitWriteLock();
+                    }
+                }
+
+                // 2. Purga por edad (estructuras muy antiguas)
+                // Purgar estructuras antiguas sin importar estado
+                var oldStructures = structures
+                    .Where(s => (currentBar - s.CreatedAtBarIndex) > _config.MaxAgeBarsForPurge)
+                    .ToList();
+
+                if (oldStructures.Count > 0)
+                {
+                    _stateLock.EnterWriteLock();
+                    try
+                    {
+                        foreach (var structure in oldStructures)
+                        {
+                            RemoveStructureInternal(structure.Id);
+                            
+                            _stats.TotalPurgedSinceStart++;
+                            if (!_stats.PurgedByType.ContainsKey(structure.Type))
+                                _stats.PurgedByType[structure.Type] = 0;
+                            _stats.PurgedByType[structure.Type]++;
+                        }
+
+                        _stats.LastPurgeTime = DateTime.UtcNow;
+                        _stats.LastPurgeCount += oldStructures.Count;
+
+                        _logger.Info($"Purgadas {oldStructures.Count} estructuras de TF:{tfMinutes} por edad (> {_config.MaxAgeBarsForPurge} barras)");
+                    }
+                    finally
+                    {
+                        _stateLock.ExitWriteLock();
+                    }
+                }
+
+                // 3. Purga por límite de tipo (granular)
+                PurgeByTypeLimit(tfMinutes);
+
+                // 4. Purga por límite global (si aún se excede)
+                structures = _structuresListByTF[tfMinutes]; // Refrescar después de purgas anteriores
                 
                 if (structures.Count > _config.MaxStructuresPerTF)
                 {
@@ -908,6 +1290,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     {
                         int countToPurge = structures.Count - _config.MaxStructuresPerTF;
                         
+                        // Purgar las estructuras con score más bajo
                         var toRemove = structures
                             .OrderBy(s => s.Score)
                             .Take(countToPurge)
@@ -915,10 +1298,152 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
                         foreach (var structure in toRemove)
                         {
-                            RemoveStructure(structure.Id);
+                            RemoveStructureInternal(structure.Id);
+                            
+                            _stats.TotalPurgedSinceStart++;
+                            if (!_stats.PurgedByType.ContainsKey(structure.Type))
+                                _stats.PurgedByType[structure.Type] = 0;
+                            _stats.PurgedByType[structure.Type]++;
                         }
 
-                        _logger.Info($"Purgadas {countToPurge} estructuras de TF:{tfMinutes} (límite: {_config.MaxStructuresPerTF})");
+                        _stats.LastPurgeTime = DateTime.UtcNow;
+                        _stats.LastPurgeCount += countToPurge;
+
+                        _logger.Info($"Purgadas {countToPurge} estructuras de TF:{tfMinutes} por límite global (límite: {_config.MaxStructuresPerTF})");
+                    }
+                    finally
+                    {
+                        _stateLock.ExitWriteLock();
+                    }
+                }
+            }
+            finally
+            {
+                _stateLock.ExitUpgradeableReadLock();
+            }
+        }
+
+        /// <summary>
+        /// Purga estructuras por límite de tipo
+        /// Cada tipo de estructura tiene su propio límite máximo
+        /// </summary>
+        private void PurgeByTypeLimit(int tfMinutes)
+        {
+            var structures = _structuresListByTF[tfMinutes];
+
+            // Agrupar por tipo
+            var byType = structures.GroupBy(s => s.Type).ToList();
+
+            foreach (var group in byType)
+            {
+                string type = group.Key;
+                int count = group.Count();
+                int maxForType = GetMaxStructuresByType(type);
+
+                if (count > maxForType)
+                {
+                    int countToPurge = count - maxForType;
+
+                    // Purgar las estructuras con score más bajo de este tipo
+                    var toRemove = group
+                        .OrderBy(s => s.Score)
+                        .Take(countToPurge)
+                        .ToList();
+
+                    _stateLock.EnterWriteLock();
+                    try
+                    {
+                        foreach (var structure in toRemove)
+                        {
+                            RemoveStructureInternal(structure.Id);
+                            
+                            _stats.TotalPurgedSinceStart++;
+                            if (!_stats.PurgedByType.ContainsKey(structure.Type))
+                                _stats.PurgedByType[structure.Type] = 0;
+                            _stats.PurgedByType[structure.Type]++;
+                        }
+
+                        _stats.LastPurgeTime = DateTime.UtcNow;
+                        _stats.LastPurgeCount += countToPurge;
+
+                        _logger.Info($"Purgadas {countToPurge} estructuras de tipo {type} en TF:{tfMinutes} (límite: {maxForType})");
+                    }
+                    finally
+                    {
+                        _stateLock.ExitWriteLock();
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Obtiene el límite máximo de estructuras para un tipo específico
+        /// </summary>
+        private int GetMaxStructuresByType(string type)
+        {
+            switch (type)
+            {
+                case "FVG":
+                    return _config.MaxStructuresByType_FVG;
+                case "OB":
+                    return _config.MaxStructuresByType_OB;
+                case "SWING":
+                    return _config.MaxStructuresByType_Swing;
+                case "BOS":
+                case "CHoCH":
+                    return _config.MaxStructuresByType_BOS;
+                case "POI":
+                    return _config.MaxStructuresByType_POI;
+                case "LIQUIDITY_VOID":
+                    return _config.MaxStructuresByType_LV;
+                case "LIQUIDITY_GRAB":
+                    return _config.MaxStructuresByType_LG;
+                case "DOUBLE_TOP":
+                    return _config.MaxStructuresByType_Double;
+                default:
+                    return _config.MaxStructuresPerTF; // Fallback al límite global
+            }
+        }
+
+        /// <summary>
+        /// Purga agresiva de Liquidity Grabs antiguos
+        /// Los LG pierden relevancia rápidamente
+        /// </summary>
+        private void PurgeAggressiveLiquidityGrabs(int tfMinutes)
+        {
+            if (!_config.EnableAggressivePurgeForLG)
+                return;
+
+            _stateLock.EnterUpgradeableReadLock();
+            try
+            {
+                var structures = _structuresListByTF[tfMinutes];
+                int currentBar = _provider.GetCurrentBarIndex(tfMinutes);
+
+                var oldGrabs = structures
+                    .OfType<LiquidityGrabInfo>()
+                    .Where(lg => (currentBar - lg.CreatedAtBarIndex) > _config.LG_MaxAgeBars)
+                    .ToList();
+
+                if (oldGrabs.Count > 0)
+                {
+                    _stateLock.EnterWriteLock();
+                    try
+                    {
+                        foreach (var grab in oldGrabs)
+                        {
+                            RemoveStructureInternal(grab.Id);
+                            
+                            _stats.TotalPurgedSinceStart++;
+                            if (!_stats.PurgedByType.ContainsKey(grab.Type))
+                                _stats.PurgedByType[grab.Type] = 0;
+                            _stats.PurgedByType[grab.Type]++;
+                        }
+
+                        _stats.LastPurgeTime = DateTime.UtcNow;
+                        _stats.LastPurgeCount += oldGrabs.Count;
+
+                        _logger.Info($"Purga agresiva: {oldGrabs.Count} Liquidity Grabs antiguos en TF:{tfMinutes} (> {_config.LG_MaxAgeBars} barras)");
                     }
                     finally
                     {
@@ -959,7 +1484,18 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             }
 
             // Guardar estado final sincrónicamente
-            // TODO Fase 5: SaveStateToJSONAsync(...).Wait();
+            if (_config.AutoSaveEnabled && _stateChanged)
+            {
+                try
+                {
+                    _logger.Info("Guardando estado final antes de dispose...");
+                    SaveStateToJSONAsync().Wait(TimeSpan.FromSeconds(10));
+                }
+                catch (Exception ex)
+                {
+                    _logger.Exception("Error guardando estado final", ex);
+                }
+            }
 
             // Liberar detectores
             foreach (var detector in _detectors)
