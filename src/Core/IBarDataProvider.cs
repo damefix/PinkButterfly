@@ -104,6 +104,13 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         double GetTickSize();
 
         /// <summary>
+        /// Obtiene el valor monetario de un punto del instrumento
+        /// Ejemplo: ES = $50, NQ = $20, EUR/USD = $100000
+        /// </summary>
+        /// <returns>Valor de un punto en la moneda base</returns>
+        double GetPointValue();
+
+        /// <summary>
         /// Obtiene el precio medio actual del mercado
         /// Preferiblemente (Bid + Ask) / 2
         /// Si no hay Bid/Ask disponible, usar (High + Low) / 2 de la última barra

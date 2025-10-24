@@ -185,6 +185,18 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 eventsTester.RunAllTests();
                 
                 Print("");
+                Print("");
+
+                // ============================================================
+                // DECISION ENGINE TESTS (DFM)
+                // ============================================================
+                Print(">>> Ejecutando Decision Engine Tests (DFM)...");
+                Print("");
+                
+                var decisionEngineTester = new DecisionEngineTests(Print);
+                decisionEngineTester.RunAllTests();
+                
+                Print("");
                 Print(">>> Todos los tests completados!");
                 Print("");
                 Print("==============================================");

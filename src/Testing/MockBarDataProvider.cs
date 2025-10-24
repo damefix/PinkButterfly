@@ -333,6 +333,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             return _tickSize;
         }
 
+        public double GetPointValue()
+        {
+            // Valor por defecto para ES (50$ por punto)
+            return 50.0;
+        }
+
         public double GetMidPrice()
         {
             lock (_lock)
