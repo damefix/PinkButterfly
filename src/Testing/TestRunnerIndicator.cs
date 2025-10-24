@@ -174,6 +174,17 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 fase9Tester.RunAllTests();
                 
                 Print("");
+                
+                // ============================================================
+                // EVENTS SYSTEM TESTS
+                // ============================================================
+                Print(">>> Ejecutando Events System Tests...");
+                Print("");
+                
+                var eventsTester = new EventsTests(Print);
+                eventsTester.RunAllTests();
+                
+                Print("");
                 Print(">>> Todos los tests completados!");
                 Print("");
                 Print("==============================================");

@@ -93,14 +93,23 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         // EVENTOS PÚBLICOS
         // ========================================================================
 
-        /// <summary>Evento disparado cuando se agrega una nueva estructura</summary>
-        public event Action<StructureBase> OnStructureAdded;
+        /// <summary>
+        /// Evento disparado cuando se agrega una nueva estructura
+        /// Proporciona información detallada sobre la estructura añadida, TF, bar index y detector
+        /// </summary>
+        public event EventHandler<StructureAddedEventArgs> OnStructureAdded;
 
-        /// <summary>Evento disparado cuando se actualiza una estructura existente</summary>
-        public event Action<StructureBase> OnStructureUpdated;
+        /// <summary>
+        /// Evento disparado cuando se actualiza una estructura existente
+        /// Proporciona información sobre el tipo de actualización y cambios de score
+        /// </summary>
+        public event EventHandler<StructureUpdatedEventArgs> OnStructureUpdated;
 
-        /// <summary>Evento disparado cuando se elimina una estructura</summary>
-        public event Action<StructureBase> OnStructureRemoved;
+        /// <summary>
+        /// Evento disparado cuando se elimina una estructura
+        /// Proporciona información sobre la estructura eliminada y la razón de eliminación
+        /// </summary>
+        public event EventHandler<StructureRemovedEventArgs> OnStructureRemoved;
 
         // ========================================================================
         // PROPIEDADES PÚBLICAS
@@ -383,8 +392,13 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     _logger.Debug($"Estructura agregada: {structure.Type} {structure.Id} TF:{structure.TF} " +
                                  $"[{structure.Low:F2}-{structure.High:F2}]");
 
-                // Disparar evento
-                OnStructureAdded?.Invoke(structure);
+                // Disparar evento con información detallada
+                OnStructureAdded?.Invoke(this, new StructureAddedEventArgs(
+                    structure, 
+                    structure.TF, 
+                    currentBarIndex, 
+                    structure.Metadata?.CreatedByDetector ?? "Unknown"
+                ));
             }
             finally
             {
@@ -412,6 +426,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 // Actualizar referencia (ya está en las colecciones)
                 _structuresById[structure.Id] = structure;
 
+                // Guardar score anterior para el evento
+                double previousScore = structure.Score;
+
                 // Recalcular score
                 int currentBarIndex = _provider.GetCurrentBarIndex(structure.TF);
                 structure.Score = _scoringEngine.CalculateScore(structure, currentBarIndex, _currentMarketBias);
@@ -421,8 +438,15 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 if (_config.EnableDebug)
                     _logger.Debug($"Estructura actualizada: {structure.Type} {structure.Id} Score:{structure.Score:F3}");
 
-                // Disparar evento
-                OnStructureUpdated?.Invoke(structure);
+                // Disparar evento con información detallada
+                OnStructureUpdated?.Invoke(this, new StructureUpdatedEventArgs(
+                    structure, 
+                    structure.TF, 
+                    currentBarIndex, 
+                    "ScoreUpdated", 
+                    previousScore, 
+                    structure.Score
+                ));
             }
             finally
             {
@@ -517,7 +541,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             _stateLock.EnterWriteLock();
             try
             {
-                return RemoveStructureInternal(id);
+                return RemoveStructureInternal(id, "Manual");
             }
             finally
             {
@@ -529,10 +553,18 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// Elimina una estructura por ID (versión interna sin lock)
         /// SOLO usar cuando ya se tiene WriteLock
         /// </summary>
-        private bool RemoveStructureInternal(string id)
+        /// <param name="id">ID de la estructura a eliminar</param>
+        /// <param name="reason">Razón de la eliminación (Purged, Invalidated, Manual, Expired)</param>
+        private bool RemoveStructureInternal(string id, string reason = "Manual")
             {
                 if (!_structuresById.TryGetValue(id, out var structure))
                     return false;
+
+                // Guardar información para el evento antes de eliminar
+                string structureType = structure.Type;
+                int tfMinutes = structure.TF;
+                double lastScore = structure.Score;
+                int currentBarIndex = _provider.GetCurrentBarIndex(tfMinutes);
 
                 // Remover de lista
                 _structuresListByTF[structure.TF].Remove(structure);
@@ -546,10 +578,17 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 _stateChanged = true;
 
                 if (_config.EnableDebug)
-                    _logger.Debug($"Estructura eliminada: {structure.Type} {id}");
+                    _logger.Debug($"Estructura eliminada: {structure.Type} {id} Razón:{reason}");
 
-                // Disparar evento
-                OnStructureRemoved?.Invoke(structure);
+                // Disparar evento con información detallada
+                OnStructureRemoved?.Invoke(this, new StructureRemovedEventArgs(
+                    id, 
+                    structureType, 
+                    tfMinutes, 
+                    currentBarIndex, 
+                    reason, 
+                    lastScore
+                ));
 
                 return true;
         }
@@ -1225,7 +1264,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     {
                         foreach (var structure in lowScoreStructures)
                         {
-                            RemoveStructureInternal(structure.Id);
+                            RemoveStructureInternal(structure.Id, "Purged_LowScore");
                             
                             // Actualizar estadísticas
                             _stats.TotalPurgedSinceStart++;
@@ -1258,7 +1297,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     {
                         foreach (var structure in oldStructures)
                         {
-                            RemoveStructureInternal(structure.Id);
+                            RemoveStructureInternal(structure.Id, "Purged_Expired");
                             
                             _stats.TotalPurgedSinceStart++;
                             if (!_stats.PurgedByType.ContainsKey(structure.Type))
@@ -1298,7 +1337,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
                         foreach (var structure in toRemove)
                         {
-                            RemoveStructureInternal(structure.Id);
+                            RemoveStructureInternal(structure.Id, "Purged_GlobalLimit");
                             
                             _stats.TotalPurgedSinceStart++;
                             if (!_stats.PurgedByType.ContainsKey(structure.Type))
@@ -1355,7 +1394,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     {
                         foreach (var structure in toRemove)
                         {
-                            RemoveStructureInternal(structure.Id);
+                            RemoveStructureInternal(structure.Id, "Purged_TypeLimit");
                             
                             _stats.TotalPurgedSinceStart++;
                             if (!_stats.PurgedByType.ContainsKey(structure.Type))
@@ -1432,7 +1471,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     {
                         foreach (var grab in oldGrabs)
                         {
-                            RemoveStructureInternal(grab.Id);
+                            RemoveStructureInternal(grab.Id, "Purged_AggressiveLG");
                             
                             _stats.TotalPurgedSinceStart++;
                             if (!_stats.PurgedByType.ContainsKey(grab.Type))
