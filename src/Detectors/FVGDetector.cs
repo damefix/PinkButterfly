@@ -354,7 +354,18 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 if (updated)
                 {
                     fvg.LastUpdatedBarIndex = barIndex;
-                    _engine.UpdateStructure(fvg);
+                    
+                    // Verificar que la estructura aún existe antes de actualizar
+                    // (puede haber sido purgada por el sistema de purga inteligente)
+                    if (_engine.GetStructureById(fvg.Id) != null)
+                    {
+                        _engine.UpdateStructure(fvg);
+                    }
+                    else
+                    {
+                        // La estructura fue purgada, removerla de la lista local
+                        fvgsToRemove.Add(fvg);
+                    }
                 }
             }
         }

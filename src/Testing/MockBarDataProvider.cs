@@ -61,6 +61,11 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// Thread-safety del provider
         /// </summary>
         public bool HasInternalLocking => true;
+        
+        /// <summary>
+        /// En tests, siempre simulamos datos históricos
+        /// </summary>
+        public bool IsHistorical => true;
 
         // ========================================================================
         // GESTIÓN DE DATOS DE PRUEBA

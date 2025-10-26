@@ -428,8 +428,13 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 {
                     grabInfo.IsActive = false;
                     grabInfo.Score = 0.0;
-                    _engine.UpdateStructure(grabInfo);
-                    _logger.Debug($"LiquidityGrabDetector: Grab {grabInfo.Id} purgado por edad");
+                    
+                    // Verificar existencia antes de actualizar
+                    if (_engine.GetStructureById(grabInfo.Id) != null)
+                    {
+                        _engine.UpdateStructure(grabInfo);
+                        _logger.Debug($"LiquidityGrabDetector: Grab {grabInfo.Id} purgado por edad");
+                    }
                 }
             }
 

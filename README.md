@@ -1438,6 +1438,100 @@ if (decision.Action == "BUY" && decision.Confidence >= 0.65)
 
 ---
 
+### ✅ FASE 11: Visual Integrator + TradeManager - EN DESARROLLO
+
+**Commit:** `[PENDING]` - Fase 11: Visual Layer con TradeManager institucional
+
+La **Fase 11** implementa la capa visual para NinjaTrader y el sistema de gestión de órdenes límite de nivel institucional.
+
+**Componentes Implementados:**
+
+- ✅ **VisualLayerNinja.cs** - Indicador visual para NinjaTrader 8
+  - Multi-Timeframe real con `BarsInProgress`
+  - Dibujo de HeatZones con filtrado inteligente
+  - Panel de información de mercado
+  - Integración con TradeManager para visualización de órdenes
+  
+- ✅ **TradeManager.cs** - Gestor institucional de órdenes límite ⭐ NUEVO
+  - Estados: PENDING, EXECUTED, CANCELLED, SL_HIT, TP_HIT
+  - **Caducidad Inteligente (3 Reglas):**
+    - **Regla 1 (Prioritaria)**: Invalidación Estructural (Score decay, estructura inactiva)
+    - **Regla 2**: BOS/CHoCH Contradictorio
+    - **Regla 3 (Fail-safe)**: Tiempo (100 barras) / Distancia (30 ATR)
+  - Tracking completo: EntryBar, ExecutionBar, ExitBar, ExitReason
+  - Vinculación a estructura fuente (`SourceStructureId`)
+  
+- ✅ **NinjaTraderBarDataProvider.cs** - Implementación de IBarDataProvider
+  - Propiedad `IsHistorical` para distinguir backtesting vs realtime
+  - Caché de ATR por timeframe
+  
+- ✅ **DecisionModels.cs** - Actualizado con `DominantStructureId`
+- ✅ **OutputAdapter.cs** - Propagación de `DominantStructureId` a TradeDecision
+
+**Características Clave:**
+
+1. **Visualización Profesional:**
+   - HeatZones con opacidad basada en Score
+   - Filtrado por `MinVisualScore` y `MinVisualHeightATR`
+   - Control granular: `ShowHeatZones`, `ShowEntryLine`, `ShowSLLine`, `ShowTPLine`
+   - Colores: Verde (BUY), Rojo (SELL)
+
+2. **Gestión de Órdenes Institucional:**
+   - Órdenes EJECUTADAS: Líneas históricas desde ExecutionBar hasta ExitBar
+   - Órdenes PENDIENTES: Abanico escalonado a la derecha del gráfico
+   - Agrupación por precio para evitar solapamiento
+   - Contador de órdenes duplicadas (ej. "LIMIT (3x): 6750.00")
+
+3. **Caducidad Estructural (Innovación):**
+   - Las órdenes se cancelan cuando la estructura que las generó decae
+   - Usa el `Score` del `CoreEngine` en tiempo real
+   - Evita órdenes basadas en estructuras obsoletas
+
+4. **Soporte para Backtesting:**
+   - Filtro `MaxEntryProximityFactor` solo en Realtime
+   - Órdenes históricas siempre visibles para auditoría
+   - Propiedad `IsHistorical` en `IBarDataProvider`
+
+**API Pública:**
+
+```csharp
+// Registrar orden
+_tradeManager.RegisterTrade(
+    action: "BUY",
+    entry: 6750.00,
+    sl: 6720.00,
+    tp: 6800.00,
+    entryBar: CurrentBar,
+    tfDominante: 60,
+    sourceStructureId: "FVG_abc123"
+);
+
+// Actualizar órdenes en cada barra
+_tradeManager.UpdateTrades(
+    currentHigh: High[0],
+    currentLow: Low[0],
+    currentBar: CurrentBar,
+    currentPrice: Close[0],
+    coreEngine: _coreEngine,
+    barData: _barDataProvider
+);
+
+// Obtener todas las órdenes
+var allTrades = _tradeManager.GetAllTrades();
+```
+
+**Documentación:**
+- `docs/TRADE_MANAGER.md` - Documentación completa del TradeManager ⭐ NUEVO
+
+**Conceptos Implementados:**
+- ✅ Caducidad estructural inteligente
+- ✅ Tracking de ejecución y salida
+- ✅ Visualización de órdenes pendientes vs ejecutadas
+- ✅ Agrupación y escalonamiento visual
+- ✅ Soporte para backtesting histórico
+
+---
+
 ## 🎯 Roadmap
 
 - [x] **Fase 0**: Setup inicial y estructura
@@ -1452,7 +1546,7 @@ if (decision.Action == "BUY" && decision.Confidence >= 0.65)
 - [x] **Fase 9**: Persistencia y Optimización (20/20 PASS) ⭐ COMPLETADA
 - [x] **Events System**: OnStructureAdded/Updated/Removed (29/29 PASS) ⭐ COMPLETADA
 - [x] **Fase 10**: Decision Fusion Model (67/67 PASS) ⭐ COMPLETADA
-- [ ] **Fase 11**: Integrador Visual NinjaTrader
+- [x] **Fase 11**: Visual Integrator + TradeManager ⭐ EN DESARROLLO
 - [ ] **Fase 12**: Backtesting & Optimization
 
 ---
@@ -1461,13 +1555,23 @@ if (decision.Action == "BUY" && decision.Confidence >= 0.65)
 
 - **Total de Tests**: 345 (100% pasando)
 - **Cobertura**: Completa en todos los módulos
-- **Líneas de Código**: ~15,000+
+- **Líneas de Código**: ~16,000+
 - **Arquitectura**: Modular, Thread-Safe, Testeable, Migrable
 - **Detectores**: 8 (FVG, Swing, Double, OB, BOS, POI, LV, LG)
 - **Componentes DFM**: 6 (ContextManager, StructureFusion, ProximityAnalyzer, RiskCalculator, DecisionFusionModel, OutputAdapter)
-- **Sistemas**: Events, Persistence, Diagnostics, Decision Fusion
-- **Patrones**: Interval Tree, Chain of Responsibility, DTO, XAI, Fail-Fast
+- **Sistemas**: Events, Persistence, Diagnostics, Decision Fusion, TradeManager (Órdenes Institucionales)
+- **Patrones**: Interval Tree, Chain of Responsibility, DTO, XAI, Fail-Fast, State Machine (TradeStatus)
+- **Visual Layer**: VisualLayerNinja con Multi-Timeframe real, HeatZones, TradeManager integrado
 
 ---
 
-**Última actualización**: Decision Fusion Model completado - Tests 345/345 PASS (100%) - Sistema de decisiones de trading con 6 componentes modulares, scoring multi-factor, entry estructural, position sizing dinámico y explainability completa. **Prompt original 100% completado + DFM implementado.**
+## 📚 Documentación
+
+- `docs/COBERTURA_TESTS.md` - Cobertura completa de tests
+- `docs/TRADE_MANAGER.md` - Gestor institucional de órdenes ⭐ NUEVO
+- `docs/prompt-inicial-definicion-del-core.txt` - Especificación original
+- `docs/prompt-de-la-parte-visual.txt` - Especificación visual
+
+---
+
+**Última actualización**: TradeManager institucional implementado - Sistema de gestión de órdenes límite con caducidad estructural inteligente (3 reglas), tracking completo de ejecución/salida, y visualización profesional en NinjaTrader. Visual Layer con Multi-Timeframe real, HeatZones filtradas, y abanico de órdenes pendientes. **Fase 11 en desarrollo activo.**

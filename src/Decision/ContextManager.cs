@@ -120,7 +120,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         }
 
         /// <summary>
-        /// Calcula el GlobalBias y GlobalBiasStrength basado en BOS/CHoCH recientes
+        /// CALIBRACIÓN V5 (FINAL - ÓPTIMA): Calcula el GlobalBias y GlobalBiasStrength basado en BOS/CHoCH recientes
+        /// Este método original demostró ser el más efectivo (PF 2.00, Win Rate 42.9%)
         /// </summary>
         private void CalculateGlobalBias(DecisionSnapshot snapshot, CoreEngine coreEngine, int currentBar)
         {

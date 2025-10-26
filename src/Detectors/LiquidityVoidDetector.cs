@@ -410,7 +410,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     // Recalcular score
                     existingVoid.Score = CalculateVoidScore(existingVoid, tfMinutes, newVoid.CreatedAtBarIndex, atr);
 
-                    _engine.UpdateStructure(existingVoid);
+                    // Verificar existencia antes de actualizar
+                    if (_engine.GetStructureById(existingVoid.Id) != null)
+                    {
+                        _engine.UpdateStructure(existingVoid);
+                    }
+                    
                     return existingVoid;
                 }
             }
@@ -480,7 +485,17 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 }
 
                 voidInfo.LastUpdatedBarIndex = barIndex;
-                _engine.UpdateStructure(voidInfo);
+                
+                // Verificar existencia antes de actualizar
+                if (_engine.GetStructureById(voidInfo.Id) != null)
+                {
+                    _engine.UpdateStructure(voidInfo);
+                }
+                else
+                {
+                    // Void fue purgado, removerlo de la lista local
+                    voidsToRemove.Add(voidInfo);
+                }
             }
         }
 

@@ -210,9 +210,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         }
 
         /// <summary>
-        /// CALIBRACIÓN V5 (FINAL - ÓPTIMA): Calcula el alineamiento con el bias global
+        /// Calcula el alineamiento con el bias global
         /// Retorna: 1.0 (alineado), 0.5 (neutral), 0.0 (contra el bias)
-        /// Esta lógica original demostró ser la más efectiva (PF 2.00, Win Rate 42.9%)
         /// </summary>
         private double CalculateBiasAlignment(string zoneDirection, string globalBias, double globalBiasStrength)
         {

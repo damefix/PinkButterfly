@@ -49,6 +49,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         public string Rationale { get; set; } // Explicación corta
         public DecisionScoreBreakdown Explainability { get; set; }
         public List<string> SourceStructureIds { get; set; }
+        public string DominantStructureId { get; set; } // ID de la estructura dominante (para TradeManager)
         public DateTime GeneratedAt { get; set; }
 
         public TradeDecision()

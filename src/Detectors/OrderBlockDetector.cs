@@ -360,7 +360,17 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 if (updated)
                 {
                     ob.LastUpdatedBarIndex = barIndex;
-                    _engine.UpdateStructure(ob);
+                    
+                    // Verificar que la estructura aún existe antes de actualizar
+                    if (_engine.GetStructureById(ob.Id) != null)
+                    {
+                        _engine.UpdateStructure(ob);
+                    }
+                    else
+                    {
+                        // La estructura fue purgada, removerla de la lista local
+                        obsToRemove.Add(ob);
+                    }
                 }
             }
         }

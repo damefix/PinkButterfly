@@ -106,21 +106,28 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// </summary>
         private void CalculateProximity(HeatZone zone, double currentPrice, IBarDataProvider barData, int currentBar)
         {
-            // 1. Calcular distancia (lógica jerárquica: dentro/fuera)
-            double distance;
-
-            if (currentPrice >= zone.Low && currentPrice <= zone.High)
+            // 1. Calcular distancia al ENTRY ESTRUCTURAL (no al borde de la zona)
+            // Esto refleja la distancia real a donde se colocará la orden
+            double entryPrice;
+            
+            if (zone.Direction == "Bullish")
             {
-                // Precio está DENTRO de la zona
-                distance = 0.0;
+                // BUY: Entry en el borde inferior de la zona
+                entryPrice = zone.Low;
+            }
+            else if (zone.Direction == "Bearish")
+            {
+                // SELL: Entry en el borde superior de la zona
+                entryPrice = zone.High;
             }
             else
             {
-                // Precio está FUERA de la zona: distancia al borde más cercano
-                double distanceToHigh = Math.Abs(currentPrice - zone.High);
-                double distanceToLow = Math.Abs(currentPrice - zone.Low);
-                distance = Math.Min(distanceToHigh, distanceToLow);
+                // Neutral: usar centro de la zona
+                entryPrice = zone.CenterPrice;
             }
+            
+            // Distancia al Entry estructural
+            double distance = Math.Abs(currentPrice - entryPrice);
 
             // 2. Obtener ATR del TF Dominante de la zona
             double atr = barData.GetATR(zone.TFDominante, currentBar, 14);
@@ -136,20 +143,72 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             // 3. Normalizar distancia por ATR
             double distanceATR = distance / atr;
 
-            // 4. Calcular factor de proximidad (lineal)
+            // 4. Calcular factor de proximidad base (lineal)
             // proximityFactor = max(0, 1 - (distanceATR / ProximityThresholdATR))
-            double proximityFactor = Math.Max(0.0, 1.0 - (distanceATR / _config.ProximityThresholdATR));
+            double baseProximityFactor = Math.Max(0.0, 1.0 - (distanceATR / _config.ProximityThresholdATR));
+            
+            // 5. Penalización por tamaño de zona (zonas grandes son menos precisas)
+            double zoneHeight = zone.High - zone.Low;
+            double zoneHeightATR = zoneHeight / atr;
+            
+            // CALIBRACIÓN V5 (ÓPTIMA): Penalización suavizada para zonas de tamaño medio
+            // - Zonas < 5 ATR: sin penalización (1.0)
+            // - Zonas 5-15 ATR: penalización MUY leve (1.0 -> 0.80) - SUAVIZADO
+            // - Zonas 15-30 ATR: penalización moderada (0.80 -> 0.30)
+            // - Zonas > 30 ATR: penalización máxima (0.30 mínimo)
+            double sizePenalty;
+            if (zoneHeightATR <= 5.0)
+            {
+                sizePenalty = 1.0; // Sin penalización para zonas pequeñas
+            }
+            else if (zoneHeightATR <= 15.0)
+            {
+                // CALIBRACIÓN V5: Penalización MUY leve: 1.0 -> 0.80 (antes era 1.0 -> 0.5)
+                // Formula: 1.0 - ((zoneHeightATR - 5.0) / 50.0)
+                // En 5 ATR: 1.0, en 10 ATR: 0.90, en 15 ATR: 0.80
+                sizePenalty = 1.0 - ((zoneHeightATR - 5.0) / 50.0);
+            }
+            else if (zoneHeightATR <= 30.0)
+            {
+                // Penalización moderada: 0.80 -> 0.30
+                sizePenalty = 0.80 - ((zoneHeightATR - 15.0) / 30.0);
+            }
+            else
+            {
+                // Penalización máxima para zonas gigantes
+                sizePenalty = 0.30;
+            }
+            
+            // 6. Factor de proximidad final (con penalización)
+            double proximityFactor = baseProximityFactor * sizePenalty;
 
-            // 5. Calcular distancia en ticks (para Entry/Slippage)
+            // 7. Calcular distancia en ticks (para Entry/Slippage)
             double tickSize = barData.GetTickSize();
             double distanceTicks = tickSize > 0 ? distance / tickSize : 0.0;
 
-            // 6. Añadir a Metadata
+            // 8. Añadir a Metadata
             zone.Metadata["Distance"] = distance;
             zone.Metadata["DistanceATR"] = distanceATR;
             zone.Metadata["ProximityFactor"] = proximityFactor;
+            zone.Metadata["ProximityScore"] = proximityFactor; // Alias para compatibilidad
             zone.Metadata["DistanceTicks"] = distanceTicks;
             zone.Metadata["IsInside"] = distance == 0.0;
+            zone.Metadata["CurrentPrice"] = currentPrice; // Para debugging
+            
+            // Logging de depuración
+            if (currentPrice == 0.0)
+            {
+                _logger.Warning(string.Format(
+                    "[ProximityAnalyzer] ⚠️ BUG DETECTADO: CurrentPrice = 0.00 para HeatZone {0} (TF={1})",
+                    zone.Id, zone.TFDominante));
+            }
+            
+            // Logging detallado para depuración
+            _logger.Debug(string.Format(
+                "[ProximityAnalyzer] HeatZone {0}: EntryPrice={1:F2}, CurrentPrice={2:F2}, Distance={3:F2}, " +
+                "DistanceATR={4:F2}, BaseProximity={5:F4}, ZoneHeightATR={6:F2}, SizePenalty={7:F4}, FinalProximity={8:F4}",
+                zone.Id, entryPrice, currentPrice, distance, distanceATR, baseProximityFactor, 
+                zoneHeightATR, sizePenalty, proximityFactor));
         }
     }
 }

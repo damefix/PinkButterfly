@@ -30,6 +30,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         private readonly EngineConfig _config;
         private readonly ILogger _logger;
         private readonly List<IDecisionComponent> _components;
+        private TradeDecision _lastDecision; // Para filtro de duplicados consecutivos
 
         /// <summary>
         /// Constructor del DecisionEngine
@@ -199,7 +200,57 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             _logger.Debug(string.Format("[DecisionEngine] Pipeline completado. Decisión: {0} @ {1:F2}",
                 finalDecision.Action, finalDecision.Entry));
 
+            // FILTRO DE DUPLICADOS CONSECUTIVOS
+            // Si la decisión es idéntica a la anterior, convertir a WAIT para evitar saturación
+            if (_lastDecision != null && IsIdenticalDecision(finalDecision, _lastDecision))
+            {
+                _logger.Warning(string.Format(
+                    "[DecisionEngine] ⚠ Señal duplicada detectada: {0} @ {1:F2} (idéntica a barra anterior) → Convertida a WAIT",
+                    finalDecision.Action, finalDecision.Entry));
+                
+                finalDecision = new TradeDecision
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    Action = "WAIT",
+                    Confidence = finalDecision.Confidence,
+                    Entry = 0.0,
+                    StopLoss = 0.0,
+                    TakeProfit = 0.0,
+                    PositionSizeContracts = 0.0,
+                    Rationale = "WAIT - Señal duplicada de barra anterior (filtro anti-saturación)",
+                    GeneratedAt = DateTime.UtcNow
+                };
+            }
+            
+            // Guardar decisión para comparación en siguiente barra
+            _lastDecision = finalDecision;
+
             return finalDecision;
+        }
+        
+        /// <summary>
+        /// Compara dos decisiones para detectar duplicados
+        /// Dos decisiones son idénticas si tienen el mismo Action, Entry, SL y TP
+        /// </summary>
+        private bool IsIdenticalDecision(TradeDecision current, TradeDecision previous)
+        {
+            if (current == null || previous == null)
+                return false;
+            
+            // Solo comparar si ambas son señales operativas (BUY/SELL)
+            if (current.Action != "BUY" && current.Action != "SELL")
+                return false;
+            
+            if (previous.Action != "BUY" && previous.Action != "SELL")
+                return false;
+            
+            // Comparar Action, Entry, SL, TP con tolerancia de 0.01 para decimales
+            bool sameAction = current.Action == previous.Action;
+            bool sameEntry = Math.Abs(current.Entry - previous.Entry) < 0.01;
+            bool sameSL = Math.Abs(current.StopLoss - previous.StopLoss) < 0.01;
+            bool sameTP = Math.Abs(current.TakeProfit - previous.TakeProfit) < 0.01;
+            
+            return sameAction && sameEntry && sameSL && sameTP;
         }
 
         /// <summary>

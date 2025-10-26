@@ -291,8 +291,16 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 poi.Bias = DetermineBias(confluence);
                 poi.IsPremium = DetermineIfPremium(poi, tfMinutes, barIndex, atr);
 
-                // Notificar al motor del cambio
-                _engine.UpdateStructure(poi);
+                // Notificar al motor del cambio (verificar existencia primero)
+                if (_engine.GetStructureById(poi.Id) != null)
+                {
+                    _engine.UpdateStructure(poi);
+                }
+                else
+                {
+                    // POI fue purgado, no hacer nada (será removido en la siguiente iteración)
+                    continue;
+                }
 
                 if (_config.EnableDebug)
                 {
@@ -446,7 +454,13 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 if (!allSourcesActive)
                 {
                     poi.IsActive = false;
-                    _engine.UpdateStructure(poi);
+                    
+                    // Verificar existencia antes de actualizar
+                    if (_engine.GetStructureById(poi.Id) != null)
+                    {
+                        _engine.UpdateStructure(poi);
+                    }
+                    
                     poisToRemove.Add(poi);
 
                     if (_config.EnableDebug)
@@ -463,7 +477,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     poi.CompositeScore = CalculateCompositeScore(sourceStructures);
                     poi.IsPremium = DetermineIfPremium(poi, tfMinutes, barIndex, atr);
                     poi.LastUpdatedBarIndex = barIndex;
-                    _engine.UpdateStructure(poi);
+                    
+                    // Verificar existencia antes de actualizar
+                    if (_engine.GetStructureById(poi.Id) != null)
+                    {
+                        _engine.UpdateStructure(poi);
+                    }
                 }
             }
 

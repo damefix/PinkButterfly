@@ -237,7 +237,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     doublePattern.Status = "Confirmed";
                     doublePattern.IsCompleted = true;
                     doublePattern.LastUpdatedBarIndex = barIndex;
-                    _engine.UpdateStructure(doublePattern);
+                    
+                    // Verificar existencia antes de actualizar
+                    if (_engine.GetStructureById(doublePattern.Id) != null)
+                    {
+                        _engine.UpdateStructure(doublePattern);
+                    }
 
                     if (_config.EnableDebug)
                     {
@@ -256,7 +261,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                         doublePattern.Status = "Invalid";
                         doublePattern.IsActive = false;
                         doublePattern.LastUpdatedBarIndex = barIndex;
-                        _engine.UpdateStructure(doublePattern);
+                        
+                        // Verificar existencia antes de actualizar
+                        if (_engine.GetStructureById(doublePattern.Id) != null)
+                        {
+                            _engine.UpdateStructure(doublePattern);
+                        }
 
                         if (_config.EnableDebug)
                         {
