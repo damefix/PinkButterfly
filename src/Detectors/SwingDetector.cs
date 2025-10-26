@@ -311,7 +311,17 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 {
                     swing.IsBroken = true;
                     swing.LastUpdatedBarIndex = barIndex;
-                    _engine.UpdateStructure(swing);
+                    
+                    // Verificar existencia antes de actualizar
+                    if (_engine.GetStructureById(swing.Id) != null)
+                    {
+                        _engine.UpdateStructure(swing);
+                    }
+                    else
+                    {
+                        // Swing fue purgado, removerlo de la lista local
+                        swingsToRemove.Add(swing);
+                    }
 
                     if (_config.EnableDebug)
                         _logger.Debug($"SwingDetector: Swing {(swing.IsHigh ? "High" : "Low")} {swing.Id} BROKEN at bar {barIndex}");

@@ -120,6 +120,28 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         
         /// <summary>Tags personalizados (clave-valor) para clasificación o filtrado</summary>
         public Dictionary<string, string> Tags { get; set; } = new Dictionary<string, string>();
+        
+        // ========================================================================
+        // PROXIMITY SCORING (Actualizado dinámicamente en Fast Load Mode)
+        // ========================================================================
+        
+        /// <summary>Score de proximidad (0.0-1.0) - Recalculado en cada barra</summary>
+        public double ProximityScore { get; set; } = 0.0;
+        
+        /// <summary>Factor de proximidad (0.0-1.0) - Alias de ProximityScore</summary>
+        public double ProximityFactor { get; set; } = 0.0;
+        
+        /// <summary>Distancia al precio actual en ATR</summary>
+        public double DistanceATR { get; set; } = 0.0;
+        
+        /// <summary>Penalización por tamaño de zona (0.1-1.0)</summary>
+        public double SizePenalty { get; set; } = 1.0;
+        
+        /// <summary>Altura de la zona en ATR</summary>
+        public double ZoneHeightATR { get; set; } = 0.0;
+        
+        /// <summary>Índice de barra de la última actualización de proximidad</summary>
+        public int LastProximityUpdate { get; set; } = -1;
     }
 
     // ============================================================================

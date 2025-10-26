@@ -16,6 +16,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -89,6 +90,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// <summary>Indica si el motor está disposed</summary>
         private bool _isDisposed;
 
+        /// <summary>Tracker de progreso para procesamiento histórico</summary>
+        private ProgressTracker _progressTracker;
+
+        /// <summary>Contador de guardados realizados (para reporte de progreso)</summary>
+        private int _saveCounter;
+
         // ========================================================================
         // EVENTOS PÚBLICOS
         // ========================================================================
@@ -137,6 +144,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
         /// <summary>Indica si el motor está inicializado y listo para operar</summary>
         public bool IsInitialized => _isInitialized;
+
+        /// <summary>Indica si el motor está en modo estático (no procesa nuevas barras, solo sirve estructuras cargadas)</summary>
+        private bool _isStaticMode = false;
+        
+        /// <summary>Modo estático: Si es true, OnBarClose() no hace nada (estructuras cargadas desde JSON)</summary>
+        public bool IsStaticMode => _isStaticMode;
 
         /// <summary>Número total de estructuras en memoria</summary>
         public int TotalStructureCount
@@ -235,6 +248,47 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 // Inicializar detectores
                 InitializeDetectors();
 
+                // ========================================================================
+                // FAST LOAD: Cargar estado desde JSON si está habilitado
+                // ========================================================================
+                if (_config.EnableFastLoadFromJSON)
+                {
+                    _logger.Info("═══════════════════════════════════════════════════════");
+                    _logger.Info("⚡ FAST LOAD MODE ACTIVADO (Solo DFM)");
+                    _logger.Info("═══════════════════════════════════════════════════════");
+                    
+                    try
+                    {
+                        _logger.Info($"[FAST LOAD] Intentando cargar desde: {_config.StateFilePath}");
+                        var startTime = DateTime.UtcNow;
+                        
+                        // LoadStateFromJSON maneja la expansión de ruta internamente
+                        LoadStateFromJSON(_config.StateFilePath, true);
+                        
+                        var loadTime = (DateTime.UtcNow - startTime).TotalSeconds;
+                        
+                        _logger.Info($"[FAST LOAD] ✅ Estructuras cargadas en {loadTime:F2} segundos");
+                        _logger.Info($"[FAST LOAD] Total estructuras: {TotalStructureCount}");
+                        _logger.Info($"[FAST LOAD] CoreEngine en MODO ESTÁTICO (no procesará nuevas barras)");
+                        _logger.Info($"[FAST LOAD] DecisionEngine se ejecutará normalmente sobre estructuras cargadas");
+                        _logger.Info("═══════════════════════════════════════════════════════");
+                        
+                        // Activar modo estático: no procesar nuevas barras
+                        SetStaticMode(true);
+                    }
+                    catch (FileNotFoundException ex)
+                    {
+                        _logger.Warning($"[FAST LOAD] ⚠️ Archivo no encontrado: {ex.Message}");
+                        _logger.Warning("[FAST LOAD] Ejecuta primero con Fast Load desactivado para generar el archivo");
+                        _logger.Warning("[FAST LOAD] Continuando con procesamiento normal...");
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.Error($"[FAST LOAD] ❌ Error cargando estado: {ex.Message}");
+                        _logger.Warning("[FAST LOAD] Continuando sin estado previo (procesamiento normal)");
+                    }
+                }
+
                 _isInitialized = true;
                 _logger.Info("CoreEngine inicializado correctamente");
             }
@@ -306,6 +360,48 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         }
 
         // ========================================================================
+        // SISTEMA DE PROGRESO
+        // ========================================================================
+
+        /// <summary>
+        /// Inicializa el sistema de seguimiento de progreso para procesamiento histórico
+        /// Debe llamarse ANTES de empezar a procesar barras históricas
+        /// </summary>
+        /// <param name="totalBars">Total de barras que se van a procesar</param>
+        public void StartProgressTracking(int totalBars)
+        {
+            if (totalBars <= 0)
+            {
+                _logger.Warning($"StartProgressTracking: totalBars inválido ({totalBars}), progreso deshabilitado");
+                return;
+            }
+
+            _progressTracker = new ProgressTracker(totalBars, _logger, _config);
+            _saveCounter = 0;
+            
+            _logger.Info($"═══════════════════════════════════════════════════════");
+            _logger.Info($"📊 SISTEMA DE PROGRESO ACTIVADO");
+            _logger.Info($"═══════════════════════════════════════════════════════");
+            _logger.Info($"Total de barras a procesar: {totalBars:N0}");
+            _logger.Info($"Reporte cada {_config.ProgressReportEveryNBars} barras o {_config.ProgressReportEveryMinutes} minutos");
+            _logger.Info($"═══════════════════════════════════════════════════════");
+        }
+
+        /// <summary>
+        /// Finaliza el seguimiento de progreso y muestra reporte final
+        /// Debe llamarse DESPUÉS de terminar el procesamiento histórico
+        /// </summary>
+        public void FinishProgressTracking()
+        {
+            if (_progressTracker != null)
+            {
+                int structureCount = TotalStructureCount;
+                _progressTracker.ReportCompletion(structureCount, _saveCounter);
+                _progressTracker = null;
+            }
+        }
+
+        // ========================================================================
         // DETECCIÓN - ON BAR CLOSE
         // ========================================================================
 
@@ -323,11 +419,31 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 return;
             }
 
+            // FAST LOAD: Si está en modo estático, no procesar nuevas barras
+            if (_isStaticMode)
+            {
+                if (_config.EnableDebug)
+                    _logger.Debug($"[STATIC MODE] OnBarClose ignorado - TF:{tfMinutes} Bar:{barIndex}");
+                return;
+            }
+
             if (_config.EnableDebug)
                 _logger.Debug($"OnBarClose - TF:{tfMinutes} Bar:{barIndex}");
 
             try
             {
+                // Actualizar progreso si el tracker está activo
+                if (_progressTracker != null)
+                {
+                    _progressTracker.Update(barIndex);
+                    
+                    if (_progressTracker.ShouldReport())
+                    {
+                        int structureCount = TotalStructureCount;
+                        _progressTracker.Report(structureCount, _saveCounter);
+                    }
+                }
+
                 // Ejecutar todos los detectores para este timeframe
                 foreach (var detector in _detectors)
                 {
@@ -350,6 +466,49 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             catch (Exception ex)
             {
                 _logger.Exception($"Error en OnBarClose - TF:{tfMinutes} Bar:{barIndex}", ex);
+            }
+        }
+
+        /// <summary>
+        /// Activa el modo estático: el CoreEngine no procesará nuevas barras
+        /// Solo sirve las estructuras ya cargadas desde JSON
+        /// </summary>
+        public void SetStaticMode(bool enabled)
+        {
+            _isStaticMode = enabled;
+            if (enabled)
+            {
+                _logger.Info("[CoreEngine] ⚡ MODO ESTÁTICO ACTIVADO - No se procesarán nuevas barras");
+                _logger.Info("[CoreEngine] Las estructuras cargadas desde JSON se usarán para el DecisionEngine");
+            }
+            else
+            {
+                _logger.Info("[CoreEngine] Modo estático desactivado - Procesamiento normal");
+            }
+        }
+
+        /// <summary>
+        /// Actualiza los scores dinámicos en modo Fast Load
+        /// Recalcula proximidad, frescura y otros scores que dependen del precio actual
+        /// </summary>
+        /// <param name="tfMinutes">Timeframe en minutos</param>
+        /// <param name="barIndex">Índice de la barra actual</param>
+        public void UpdateScoresForFastLoad(int tfMinutes, int barIndex)
+        {
+            if (!_isStaticMode)
+                return; // Solo en modo estático (Fast Load)
+
+            try
+            {
+                // Actualizar scores de proximidad para todas las estructuras activas
+                UpdateProximityScores(tfMinutes);
+
+                if (_config.EnableDebug)
+                    _logger.Debug($"[FAST LOAD] Scores actualizados para TF:{tfMinutes} Bar:{barIndex}");
+            }
+            catch (Exception ex)
+            {
+                _logger.Exception($"Error actualizando scores en Fast Load - TF:{tfMinutes} Bar:{barIndex}", ex);
             }
         }
 
@@ -888,7 +1047,143 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// </summary>
         private void UpdateProximityScores(int tfMinutes)
         {
-            // TODO Fase 2: Implementar actualización de scores por proximidad
+            // Obtener precio actual del TF
+            int barIndex = _provider.GetCurrentBarIndex(tfMinutes);
+            if (barIndex < 0)
+                return;
+            
+            double currentPrice = _provider.GetClose(tfMinutes, barIndex);
+            if (currentPrice <= 0)
+                return;
+            
+            // Obtener ATR del TF para normalización
+            double atr = _provider.GetATR(tfMinutes, barIndex, 14);
+            if (atr <= 0)
+                atr = 1.0; // Fallback
+            
+            _stateLock.EnterWriteLock();
+            try
+            {
+                if (!_structuresListByTF.ContainsKey(tfMinutes))
+                    return;
+                
+                var structures = _structuresListByTF[tfMinutes];
+                int updatedCount = 0;
+                
+                foreach (var structure in structures)
+                {
+                    if (!structure.IsActive)
+                        continue;
+                    
+                    // 1. Calcular distancia al ENTRY ESTRUCTURAL
+                    double entryPrice;
+                    
+                    // Para estructuras direccionales, usar el borde de entrada
+                    if (structure is OrderBlockInfo ob)
+                    {
+                        entryPrice = ob.Direction == "Bullish" ? ob.Low : ob.High;
+                    }
+                    else if (structure is FVGInfo fvg)
+                    {
+                        entryPrice = fvg.Direction == "Bullish" ? fvg.Low : fvg.High;
+                    }
+                    else if (structure is PointOfInterestInfo poi)
+                    {
+                        // POI no tiene Direction, usar el centro o determinar por tipo
+                        entryPrice = (poi.High + poi.Low) / 2.0;
+                    }
+                    else if (structure is SwingInfo swing)
+                    {
+                        // Swings: usar el precio del swing
+                        entryPrice = swing.Type == "SwingHigh" ? swing.High : swing.Low;
+                    }
+                    else
+                    {
+                        // Para otras estructuras, usar el centro
+                        entryPrice = (structure.High + structure.Low) / 2.0;
+                    }
+                    
+                    // 2. Calcular distancia
+                    double distance = Math.Abs(currentPrice - entryPrice);
+                    double distanceATR = distance / atr;
+                    
+                    // 3. Calcular factor de proximidad base (lineal)
+                    double baseProximityFactor = Math.Max(0.0, 1.0 - (distanceATR / _config.ProximityThresholdATR));
+                    
+                    // 4. Penalización por tamaño de zona (zonas grandes son menos precisas)
+                    double zoneHeight = structure.High - structure.Low;
+                    double zoneHeightATR = zoneHeight / atr;
+                    
+                    double sizePenalty;
+                    if (zoneHeightATR <= 5.0)
+                    {
+                        sizePenalty = 1.0; // Sin penalización para zonas pequeñas
+                    }
+                    else if (zoneHeightATR <= 15.0)
+                    {
+                        // Penalización leve: 1.0 -> 0.5
+                        sizePenalty = 1.0 - ((zoneHeightATR - 5.0) / 20.0);
+                    }
+                    else if (zoneHeightATR <= 30.0)
+                    {
+                        // Penalización severa: 0.5 -> 0.1
+                        sizePenalty = 0.5 - ((zoneHeightATR - 15.0) / 37.5);
+                    }
+                    else
+                    {
+                        // Penalización máxima para zonas gigantes
+                        sizePenalty = 0.1;
+                    }
+                    
+                    // 5. Factor de proximidad final (con penalización)
+                    double proximityFactor = baseProximityFactor * sizePenalty;
+                    
+                    // 6. Actualizar el Score de la estructura
+                    // El Score combina: Freshness + Proximity + otros factores
+                    // Aquí solo actualizamos la componente de proximidad
+                    // El Score base (freshness, confluence, etc.) se mantiene del JSON
+                    
+                    // Calcular freshness (edad de la estructura)
+                    int age = barIndex - structure.CreatedAtBarIndex;
+                    double freshness = CalculateFreshness(age, tfMinutes);
+                    
+                    // Score combinado: 70% freshness + 30% proximity
+                    // (Esta es una fórmula simplificada; el DFM hace el cálculo completo)
+                    structure.Score = (freshness * 0.7) + (proximityFactor * 0.3);
+                    
+                    // Añadir metadata para debugging
+                    structure.Metadata.ProximityScore = proximityFactor;
+                    structure.Metadata.ProximityFactor = proximityFactor;
+                    structure.Metadata.DistanceATR = distanceATR;
+                    structure.Metadata.SizePenalty = sizePenalty;
+                    structure.Metadata.ZoneHeightATR = zoneHeightATR;
+                    structure.Metadata.LastProximityUpdate = barIndex;
+                    
+                    updatedCount++;
+                }
+                
+                if (_config.EnableDebug && updatedCount > 0)
+                {
+                    _logger.Debug($"[FAST LOAD] Proximity actualizado: {updatedCount} estructuras en TF {tfMinutes}");
+                }
+            }
+            finally
+            {
+                _stateLock.ExitWriteLock();
+            }
+        }
+        
+        /// <summary>
+        /// Calcula el factor de frescura (freshness) basado en la edad de la estructura
+        /// </summary>
+        private double CalculateFreshness(int age, int tfMinutes)
+        {
+            // Freshness decay exponencial
+            // Zonas recientes (< 10 barras) = 1.0
+            // Zonas viejas (> 100 barras) = ~0.1
+            int decayPeriod = 50; // Default: 50 barras
+            double freshness = Math.Exp(-age / (double)decayPeriod);
+            return Math.Max(0.01, freshness); // Mínimo 1%
         }
 
         /// <summary>
@@ -974,6 +1269,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 _stats.LastSaveSuccessful = true;
                 _stats.LastSaveError = null;
                 _stats.TotalSavesSinceStart++;
+                
+                // Incrementar contador para reporte de progreso
+                _saveCounter++;
 
                 _logger.Info($"Estado guardado exitosamente: {filePath}");
             }

@@ -138,7 +138,10 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 var settings = new JsonSerializerSettings
                 {
                     TypeNameHandling = TypeNameHandling.Auto,
-                    DateTimeZoneHandling = DateTimeZoneHandling.Utc
+                    TypeNameAssemblyFormatHandling = TypeNameAssemblyFormatHandling.Simple,
+                    DateTimeZoneHandling = DateTimeZoneHandling.Utc,
+                    // Ignorar diferencias de versión del assembly
+                    SerializationBinder = new IgnoreAssemblyVersionBinder()
                 };
 
                 var state = JsonConvert.DeserializeObject<BrainState>(json, settings);
@@ -362,6 +365,37 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             {
                 _logger.Exception($"Error creando backup de {filePath}", ex);
             }
+        }
+    }
+
+    /// <summary>
+    /// SerializationBinder personalizado que ignora diferencias de versión y nombre de ensamblado
+    /// Permite deserializar JSON guardado con versiones anteriores del código
+    /// </summary>
+    internal class IgnoreAssemblyVersionBinder : Newtonsoft.Json.Serialization.ISerializationBinder
+    {
+        public Type BindToType(string assemblyName, string typeName)
+        {
+            // Extraer solo el nombre del tipo (sin el ensamblado)
+            // Ejemplo: "NinjaTrader.NinjaScript.Indicators.PinkButterfly.OrderBlockInfo"
+            string typeOnly = typeName;
+            
+            // Buscar el tipo en el ensamblado actual (ignorando el nombre del ensamblado del JSON)
+            Type type = Type.GetType($"{typeOnly}, {typeof(PersistenceManager).Assembly.FullName}");
+            
+            if (type == null)
+            {
+                // Si no se encuentra, intentar sin especificar ensamblado (búsqueda en todos los ensamblados cargados)
+                type = Type.GetType(typeOnly);
+            }
+            
+            return type;
+        }
+
+        public void BindToName(Type serializedType, out string assemblyName, out string typeName)
+        {
+            assemblyName = null;
+            typeName = serializedType.FullName;
         }
     }
 }

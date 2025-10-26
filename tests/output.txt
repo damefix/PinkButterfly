@@ -1,0 +1,563 @@
+CoreBrain: Terminated
+[VisualLayerNinja] State.Configure - Iniciando configuración MTF
+[VisualLayerNinja] TF del gráfico principal: 15m
+[VisualLayerNinja] TFs configurados en Core: 5, 15, 60, 240, 1440
+[VisualLayerNinja] DataSeries agregada para TF 5m
+[VisualLayerNinja] Saltando TF 15m (es el TF principal)
+[VisualLayerNinja] DataSeries agregada para TF 60m
+[VisualLayerNinja] DataSeries agregada para TF 240m
+[VisualLayerNinja] DataSeries agregada para TF 1440m
+[VisualLayerNinja] State.Configure completado
+[VisualLayerNinja] State.DataLoaded - Iniciando inicialización
+[VisualLayerNinja] Logger inicializado
+[VisualLayerNinja] Configuración cargada
+[VisualLayerNinja] BarDataProvider creado
+[INFO] CoreEngine creado con 5 timeframes: [5, 15, 60, 240, 1440]
+[INFO] Inicializando CoreEngine...
+[INFO] Inicializando detectores...
+[INFO] FVGDetector: Inicializado
+[INFO]   ? FVGDetector registrado
+[INFO] SwingDetector: Inicializado
+[INFO]   ? SwingDetector registrado
+[INFO]   ? DoubleDetector registrado
+[INFO] OrderBlockDetector: Inicializado
+[INFO]   ? OrderBlockDetector registrado
+[INFO] BOSDetector: Inicializado
+[INFO]   ? BOSDetector registrado
+[INFO] POIDetector: Inicializado
+[INFO]   ? POIDetector registrado
+[INFO] LiquidityVoidDetector: Inicializado
+[INFO]   ? LiquidityVoidDetector registrado
+[INFO] LiquidityGrabDetector: Inicializado
+[INFO]   ? LiquidityGrabDetector registrado
+[INFO] Total detectores registrados: 8
+[INFO] CoreEngine inicializado correctamente
+[VisualLayerNinja] CoreEngine inicializado
+[INFO] [DecisionEngine] Validación de pesos OK: suma = 1,0000
+[INFO] [DecisionEngine] Inicializado correctamente con 6 componentes
+[VisualLayerNinja] DecisionEngine inicializado
+[VisualLayerNinja] State.DataLoaded completado exitosamente
+[VisualLayerNinja] Iniciando procesamiento histórico desde barra 986/1486 (TF 60m)
+[VisualLayerNinja] Iniciando procesamiento histórico desde barra 5441/5941 (TF 15m)
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,717
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,717
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,717
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,717
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,717
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,682
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,682
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,682
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,682
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,682
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,682
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,682
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,682
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,682
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,682
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,682
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,682
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,682
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,682
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,682
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,682
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,682
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,717
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,580
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,580
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,580
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,580
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,580
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,580
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,580
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,580
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,580
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,580
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,580
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,580
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,580
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,580
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,580
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,580
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,580
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,589
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,589
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,589
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,580
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,580
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,580
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,580
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,589
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,589
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,589
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,589
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,589
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,589
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,589
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,589
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,682
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,682
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,682
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,682
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,682
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,682
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,682
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,682
+[INFO] LV: ? Creating Bullish void at [6712,00, 6714,50], size=2,50
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,589
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,589
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,589
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,589
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,589
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,589
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,589
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,589
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,587
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,587
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,587
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,587
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,586
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,586
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,586
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,586
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,589
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,589
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,589
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,589
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,587
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,587
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,587
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,587
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,575
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,575
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,575
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,575
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,676
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,676
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,590
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,590
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,612
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,612
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,612
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,612
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,612
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,612
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,612
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,612
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,612
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,612
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,612
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,612
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,612
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,612
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,612
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,612
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,613
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,613
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,613
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,711
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,711
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,711
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,711
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,711
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,711
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,711
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,613
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,613
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,613
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,613
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,613
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,613
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,676
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,676
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,676
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,676
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,613
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,613
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,613
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,613
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,613
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,613
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,613
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,613
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,613
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,613
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,613
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,613
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,676
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,676
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,676
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,676
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,676
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,676
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,676
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,676
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,676
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,676
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,676
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,676
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,658
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,658
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,658
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,658
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,658
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,530
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,530
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,530
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,530
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,530
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,530
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,530
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,530
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,530
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,530
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,530
+[INFO] Iniciando guardado de estado a: Documents/NinjaTrader 8/PinkButterfly/brain_state.json
+[INFO] Guardando estado a: C:\Users\meste\Documents\NinjaTrader 8\PinkButterfly\brain_state.json
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,528
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,528
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,528
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,528
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,528
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,528
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,528
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,528
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,528
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,528
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,528
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,656
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,585
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,585
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,585
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,585
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,657
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,657
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,657
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,657
+[INFO] Estado serializado: 3135 estructuras, 12122223 bytes
+[INFO] Estado guardado exitosamente: C:\Users\meste\Documents\NinjaTrader 8\PinkButterfly\brain_state.json (12122223 bytes)
+[INFO] Estado guardado exitosamente: Documents/NinjaTrader 8/PinkButterfly/brain_state.json
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,622
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,622
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,622
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,622
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,622
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,622
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,622
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,622
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,622
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,622
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,622
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,622
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,619
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,619
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,619
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,619
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,619
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,619
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,619
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,619
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,619
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,619
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,619
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,619
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,619
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,619
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,619
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,619
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,620
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,620
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,620
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,527
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,590
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,590
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,590
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,590
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,527
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,527
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,527
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,527
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,527
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,527
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,527
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,527
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,531
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,601
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,601
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,601
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,601
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,601
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,601
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,601
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,601
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,601
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,624
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,624
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,624
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,659
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,624
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,624
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,624
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,624
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,624
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,624
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,624
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,624
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,620
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,620
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,620
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,620
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,620
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,620
+[VisualLayerNinja] Iniciando procesamiento histórico desde barra 17321/17821 (TF 5m)
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,620
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,620
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,620
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,620
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,620
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,620
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,601
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,601
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,601
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,704
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,704
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,704
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,704
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,704
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,704
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,704
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,704
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,704
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,704
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,704
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,704
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,704
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,615
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,569
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,578
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,578
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,578
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,578
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,569
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,704
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,704
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,704
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,704
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,704
+[INFO] Iniciando guardado de estado a: Documents/NinjaTrader 8/PinkButterfly/brain_state.json
+[INFO] Guardando estado a: C:\Users\meste\Documents\NinjaTrader 8\PinkButterfly\brain_state.json
+[INFO] Estado serializado: 5655 estructuras, 25571519 bytes
+[INFO] Estado guardado exitosamente: C:\Users\meste\Documents\NinjaTrader 8\PinkButterfly\brain_state.json (25571519 bytes)
+[INFO] Estado guardado exitosamente: Documents/NinjaTrader 8/PinkButterfly/brain_state.json
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,704
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,569
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,569
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,669
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,707
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,707
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,707
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,707
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,707
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,707
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,707
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,707
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,707
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,707
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,707
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,707
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,613
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,613
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,613
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,613
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,604
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,604
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,604
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,604
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,604
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,604
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,604
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,604
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,604
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,604
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,604
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,604
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,604
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,604
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,604
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,604
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,601
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,601
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,601
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,601
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,601
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,601
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,601
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,601
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,601
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,707
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,707
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,707
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,707
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,707
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,707
+[INFO] Iniciando guardado de estado a: Documents/NinjaTrader 8/PinkButterfly/brain_state.json
+[INFO] Guardando estado a: C:\Users\meste\Documents\NinjaTrader 8\PinkButterfly\brain_state.json
+[INFO] Estado serializado: 6593 estructuras, 29900177 bytes
+[INFO] Estado guardado exitosamente: C:\Users\meste\Documents\NinjaTrader 8\PinkButterfly\brain_state.json (29900177 bytes)
+[INFO] Estado guardado exitosamente: Documents/NinjaTrader 8/PinkButterfly/brain_state.json
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,707
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,707
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,707
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,707
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,672
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,672
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,672
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,672
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,707
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,707
+[INFO] [OutputAdapter] Decisión generada: SELL @ 6812,25, Confidence: 0,707
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,000
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,533
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,524
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,524
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,524
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,524
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,627
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,627
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,627
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,627
+[INFO] Iniciando guardado de estado a: Documents/NinjaTrader 8/PinkButterfly/brain_state.json
+[INFO] Guardando estado a: C:\Users\meste\Documents\NinjaTrader 8\PinkButterfly\brain_state.json
+[INFO] [OutputAdapter] Decisión generada: WAIT @ 0,00, Confidence: 0,627
+[INFO] Estado serializado: 7054 estructuras, 32511861 bytes
+[INFO] Estado guardado exitosamente: C:\Users\meste\Documents\NinjaTrader 8\PinkButterfly\brain_state.json (32511861 bytes)
+[INFO] Estado guardado exitosamente: Documents/NinjaTrader 8/PinkButterfly/brain_state.json

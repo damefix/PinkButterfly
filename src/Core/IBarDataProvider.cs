@@ -158,6 +158,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// </summary>
         /// <returns>Nombre del instrumento</returns>
         string GetInstrumentName();
+        
+        /// <summary>
+        /// Indica si el indicador está procesando datos históricos (State.Historical)
+        /// o datos en tiempo real (State.Realtime)
+        /// </summary>
+        bool IsHistorical { get; }
 
         // ========================================================================
         // LOCKING CONTRACT (OPCIONAL)

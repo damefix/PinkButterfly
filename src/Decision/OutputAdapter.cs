@@ -156,6 +156,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 Rationale = rationale,
                 Explainability = breakdown,
                 SourceStructureIds = zone.SourceStructureIds,
+                DominantStructureId = zone.DominantStructureId, // Para TradeManager
                 GeneratedAt = DateTime.UtcNow
             };
         }
