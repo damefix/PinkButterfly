@@ -444,13 +444,20 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// </summary>
         public int StateSaveIntervalSecs { get; set; } = 600;
         
+        /// <summary>
+        /// Valida que el hash de configuración coincida al cargar estado
+        /// Si es false, carga el estado sin validar (útil para migración)
+        /// </summary>
+        public bool ValidateConfigHashOnLoad { get; set; } = true;
+        
         // ========================================================================
-        // PURGA AUTOMÁTICA DE ESTRUCTURAS (OPTIMIZACIÓN CRÍTICA)
+        // CONFIGURACIÓN DE SISTEMA - PURGA Y LÍMITES
         // ========================================================================
         
         /// <summary>
-        /// Habilita la purga automática de estructuras obsoletas
-        /// CRÍTICO: Previene degradación exponencial del rendimiento O(n²)
+        /// Habilita la purga automática de estructuras
+        /// Si es false, no se ejecuta ninguna purga (útil para tests)
+        /// OPTIMIZACIÓN: Activado (true) para prevenir degradación exponencial
         /// </summary>
         public bool EnableAutoPurge { get; set; } = true;
         
@@ -473,30 +480,6 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// OPTIMIZACIÓN: 0.20 para eliminar estructuras de baja calidad
         /// </summary>
         public double MinScoreToKeep { get; set; } = 0.20;
-        
-        /// <summary>
-        /// Número máximo de estructuras activas por timeframe
-        /// Si se excede, se eliminan las de menor score
-        /// OPTIMIZACIÓN: 300 por TF (vs 500 antes) = 1500 total (vs 18,897)
-        /// </summary>
-        public int MaxStructuresPerTF { get; set; } = 300;
-        
-        /// <summary>
-        /// Valida que el hash de configuración coincida al cargar estado
-        /// Si es false, carga el estado sin validar (útil para migración)
-        /// </summary>
-        public bool ValidateConfigHashOnLoad { get; set; } = true;
-        
-        // ========================================================================
-        // CONFIGURACIÓN DE SISTEMA - PURGA Y LÍMITES
-        // ========================================================================
-        
-        /// <summary>
-        /// Habilita la purga automática de estructuras
-        /// Si es false, no se ejecuta ninguna purga (útil para tests)
-        /// OPTIMIZACIÓN: Activado (true) para prevenir degradación exponencial
-        /// </summary>
-        public bool EnableAutoPurge { get; set; } = true;
         
         /// <summary>
         /// Máximo número de estructuras por timeframe
@@ -724,9 +707,10 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         
         /// <summary>
         /// Ratio mínimo de Risk:Reward para entrar en un trade
-        /// Default: 1.5 (realista para operativa profesional)
+        /// OPTIMIZACIÓN: R:R mínimo de 1.0 para eliminar operaciones con R:R absurdo (0.05-0.18)
+        /// Operaciones con R:R < 1.0 se rechazan
         /// </summary>
-        public double MinRiskRewardRatio { get; set; } = 1.5;
+        public double MinRiskRewardRatio { get; set; } = 1.0;
         
         /// <summary>
         /// Buffer adicional para el Stop Loss (como factor del ATR)
@@ -767,13 +751,6 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// OPTIMIZACIÓN: Mínimo 2 ATR para asegurar recompensa razonable
         /// </summary>
         public double MinTPDistanceATR { get; set; } = 2.0;
-        
-        /// <summary>
-        /// Risk:Reward mínimo requerido para ejecutar una operación
-        /// OPTIMIZACIÓN: R:R mínimo de 1.0 para eliminar operaciones con R:R absurdo (0.05-0.18)
-        /// Operaciones con R:R < 1.0 se rechazan
-        /// </summary>
-        public double MinRiskRewardRatio { get; set; } = 1.0;
         
         /// <summary>
         /// Confidence mínima para generar señal de WAIT (0.0 - 1.0)
