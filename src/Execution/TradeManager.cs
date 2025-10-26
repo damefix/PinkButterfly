@@ -324,23 +324,24 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// </summary>
         private bool CheckBOSContradictory(TradeRecord trade, CoreEngine coreEngine)
         {
-            // Obtener las últimas estructuras BOS/CHoCH del TF dominante
-            var bosStructures = coreEngine.GetAllStructures(trade.TFDominante)
-                .OfType<StructureBreakInfo>() // Cast seguro a StructureBreakInfo
-                .Where(s => s.IsActive)
-                .OrderByDescending(s => s.StartTime)
-                .Take(3) // Últimas 3 rupturas
-                .ToList();
-
-            foreach (var bos in bosStructures)
+            // CALIBRACIÓN V4: Solo cancelar si el GlobalBias (del ContextManager) CAMBIA de dirección
+            // Esto evita cancelar trades rentables por micro-BOS que son ruido de mercado
+            
+            // Obtener el GlobalBias actual del CoreEngine
+            string currentBias = coreEngine.CurrentMarketBias;
+            
+            // Para BUY LIMIT, cancelar solo si el bias cambió a Bearish
+            if (trade.Action == "BUY" && currentBias == "Bearish")
             {
-                // Para BUY LIMIT, un BOS bajista contradice nuestra hipótesis
-                if (trade.Action == "BUY" && bos.Direction == "Bearish")
-                    return true;
+                _logger.Warning($"[TradeManager] GlobalBias contradictorio: {trade.Action} @ {trade.Entry:F2} | Bias cambió a {currentBias}");
+                return true;
+            }
 
-                // Para SELL LIMIT, un BOS alcista contradice nuestra hipótesis
-                if (trade.Action == "SELL" && bos.Direction == "Bullish")
-                    return true;
+            // Para SELL LIMIT, cancelar solo si el bias cambió a Bullish
+            if (trade.Action == "SELL" && currentBias == "Bullish")
+            {
+                _logger.Warning($"[TradeManager] GlobalBias contradictorio: {trade.Action} @ {trade.Entry:F2} | Bias cambió a {currentBias}");
+                return true;
             }
 
             return false;

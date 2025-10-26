@@ -1111,6 +1111,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     double baseProximityFactor = Math.Max(0.0, 1.0 - (distanceATR / _config.ProximityThresholdATR));
                     
                     // 4. Penalización por tamaño de zona (zonas grandes son menos precisas)
+                    // CALIBRACIÓN V5: Penalización suavizada
                     double zoneHeight = structure.High - structure.Low;
                     double zoneHeightATR = zoneHeight / atr;
                     
@@ -1121,18 +1122,18 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     }
                     else if (zoneHeightATR <= 15.0)
                     {
-                        // Penalización leve: 1.0 -> 0.5
-                        sizePenalty = 1.0 - ((zoneHeightATR - 5.0) / 20.0);
+                        // CALIBRACIÓN V5: Penalización MUY leve: 1.0 -> 0.80 (antes era 1.0 -> 0.5)
+                        sizePenalty = 1.0 - ((zoneHeightATR - 5.0) / 50.0);
                     }
                     else if (zoneHeightATR <= 30.0)
                     {
-                        // Penalización severa: 0.5 -> 0.1
-                        sizePenalty = 0.5 - ((zoneHeightATR - 15.0) / 37.5);
+                        // Penalización moderada: 0.80 -> 0.30
+                        sizePenalty = 0.80 - ((zoneHeightATR - 15.0) / 30.0);
                     }
                     else
                     {
                         // Penalización máxima para zonas gigantes
-                        sizePenalty = 0.1;
+                        sizePenalty = 0.30;
                     }
                     
                     // 5. Factor de proximidad final (con penalización)

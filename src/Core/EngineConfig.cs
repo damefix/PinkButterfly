@@ -155,15 +155,17 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// Lambda para decay exponencial de frescura
         /// freshness = exp(-ageBars / FreshnessLambda)
         /// Valores más altos = estructuras "frescas" por más tiempo
+        /// CALIBRACIÓN V4: Aumentado para que estructuras de TF alto duren más
         /// </summary>
-        public double FreshnessLambda { get; set; } = 20;
+        public double FreshnessLambda { get; set; } = 50;
         
         /// <summary>
         /// Lambda para decay temporal general del score
         /// score *= exp(-deltaBars / DecayLambda)
         /// Valores más altos = decay más lento
+        /// CALIBRACIÓN V4: Aumentado a 300 para que órdenes PENDING tengan tiempo de ejecutarse
         /// </summary>
-        public double DecayLambda { get; set; } = 100;
+        public double DecayLambda { get; set; } = 300;
 
         // ========================================================================
         // PARÁMETROS DE SCORING - TOQUES
@@ -470,9 +472,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// <summary>
         /// Edad máxima de una estructura en barras
         /// Estructuras más antiguas se eliminan automáticamente
-        /// OPTIMIZACIÓN: 150 barras para balance entre contexto y rendimiento
+        /// CALIBRACIÓN V4: Aumentado a 500 para que estructuras de TF alto (4H, 1D) duren días
         /// </summary>
-        public int MaxStructureAgeBars { get; set; } = 150;
+        public int MaxStructureAgeBars { get; set; } = 500;
         
         /// <summary>
         /// Score mínimo para mantener una estructura
@@ -551,7 +553,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// Activa el desglose detallado de scoring en cada decisión
         /// OPTIMIZACIÓN: Desactivado (false) para reducir spam de logs y mejorar velocidad
         /// </summary>
-        public bool ShowScoringBreakdown { get; set; } = false;
+        public bool ShowScoringBreakdown { get; set; } = true;
         
         /// <summary>Versión del motor (para compatibilidad de persistencia)</summary>
         public string EngineVersion { get; set; } = "1.0.0";
@@ -635,43 +637,43 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// <summary>
         /// Peso del score base de las estructuras en la decisión final
         /// CRÍTICO: La suma de todos los Weight_* debe ser exactamente 1.0
-        /// OPTIMIZACIÓN: Aumentado a 0.50 (contribución real: 0.35, factor más importante)
+        /// CALIBRACIÓN V5 (ÓPTIMA): Balance perfecto para PF 2.00 y Win Rate 42.9%
         /// </summary>
-        public double Weight_CoreScore { get; set; } = 0.50;
+        public double Weight_CoreScore { get; set; } = 0.15;
         
         /// <summary>
         /// Peso de la proximidad al precio actual en la decisión final
-        /// OPTIMIZACIÓN: Reducido a 0.10 (contribución real: 0.08, estaba sobreponderado 3x)
+        /// CALIBRACIÓN V5 (ÓPTIMA): Trigger principal (40%)
         /// </summary>
-        public double Weight_Proximity { get; set; } = 0.10;
+        public double Weight_Proximity { get; set; } = 0.40;
         
         /// <summary>
         /// Peso de la confluencia de estructuras en la decisión final
-        /// OPTIMIZACIÓN: Mantenido en 0.10 (contribución real: 0.05, bien calibrado)
+        /// CALIBRACIÓN V5 (ÓPTIMA): Desactivado (redundante con StructureFusion)
         /// </summary>
-        public double Weight_Confluence { get; set; } = 0.10;
+        public double Weight_Confluence { get; set; } = 0.00;
         
         /// <summary>
         /// Peso del tipo de estructura (OB > FVG, etc.) en la decisión final
-        /// OPTIMIZACIÓN: Mantenido en 0.10 (contribución real: 0.07, razonable)
+        /// CALIBRACIÓN V5 (ÓPTIMA): Filtro de calidad (10%)
         /// </summary>
         public double Weight_Type { get; set; } = 0.10;
         
         /// <summary>
         /// Peso del alineamiento con el bias global en la decisión final
-        /// OPTIMIZACIÓN: Reducido a 0.10 (contribución real: 0.06, estaba sobreponderado 3.3x)
+        /// CALIBRACIÓN V5 (ÓPTIMA): Filtro de dirección crítico (35%)
         /// </summary>
-        public double Weight_Bias { get; set; } = 0.10;
+        public double Weight_Bias { get; set; } = 0.35;
         
         /// <summary>
         /// Peso del momentum (BOS/CHoCH) en la decisión final
-        /// OPTIMIZACIÓN: Activado en 0.10 para aprovechar momentum estructural
+        /// CALIBRACIÓN V7: Desactivado (0.00) para simplificar
         /// </summary>
-        public double Weight_Momentum { get; set; } = 0.10;
+        public double Weight_Momentum { get; set; } = 0.00;
         
         /// <summary>
         /// Peso del volumen en la decisión final
-        /// CALIBRADO: Reducido a 0.00 para simplificar y asegurar suma = 1.0
+        /// CALIBRACIÓN V7: Desactivado (0.00) para simplificar
         /// </summary>
         public double Weight_Volume { get; set; } = 0.00;
         
@@ -724,9 +726,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         
         /// <summary>
         /// Confidence mínima para generar señal de BUY/SELL (0.0 - 1.0)
-        /// CALIBRACIÓN: Ajustado a 0.55 para aumentar frecuencia de señales (Test 5000 barras)
+        /// CALIBRACIÓN V5 (ÓPTIMA): Umbral profesional para Win Rate 42.9%
         /// </summary>
-        public double MinConfidenceForEntry { get; set; } = 0.55;
+        public double MinConfidenceForEntry { get; set; } = 0.65;
         
         /// <summary>
         /// Factor de proximidad máxima para validar Entry estructural

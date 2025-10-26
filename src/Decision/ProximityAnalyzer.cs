@@ -151,11 +151,11 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             double zoneHeight = zone.High - zone.Low;
             double zoneHeightATR = zoneHeight / atr;
             
-            // Penalización progresiva:
+            // CALIBRACIÓN V5 (ÓPTIMA): Penalización suavizada para zonas de tamaño medio
             // - Zonas < 5 ATR: sin penalización (1.0)
-            // - Zonas 5-15 ATR: penalización leve (1.0 -> 0.5)
-            // - Zonas 15-30 ATR: penalización severa (0.5 -> 0.1)
-            // - Zonas > 30 ATR: penalización máxima (0.1 mínimo)
+            // - Zonas 5-15 ATR: penalización MUY leve (1.0 -> 0.80) - SUAVIZADO
+            // - Zonas 15-30 ATR: penalización moderada (0.80 -> 0.30)
+            // - Zonas > 30 ATR: penalización máxima (0.30 mínimo)
             double sizePenalty;
             if (zoneHeightATR <= 5.0)
             {
@@ -163,18 +163,20 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             }
             else if (zoneHeightATR <= 15.0)
             {
-                // Penalización leve: 1.0 -> 0.5
-                sizePenalty = 1.0 - ((zoneHeightATR - 5.0) / 20.0);
+                // CALIBRACIÓN V5: Penalización MUY leve: 1.0 -> 0.80 (antes era 1.0 -> 0.5)
+                // Formula: 1.0 - ((zoneHeightATR - 5.0) / 50.0)
+                // En 5 ATR: 1.0, en 10 ATR: 0.90, en 15 ATR: 0.80
+                sizePenalty = 1.0 - ((zoneHeightATR - 5.0) / 50.0);
             }
             else if (zoneHeightATR <= 30.0)
             {
-                // Penalización severa: 0.5 -> 0.1
-                sizePenalty = 0.5 - ((zoneHeightATR - 15.0) / 37.5);
+                // Penalización moderada: 0.80 -> 0.30
+                sizePenalty = 0.80 - ((zoneHeightATR - 15.0) / 30.0);
             }
             else
             {
                 // Penalización máxima para zonas gigantes
-                sizePenalty = 0.1;
+                sizePenalty = 0.30;
             }
             
             // 6. Factor de proximidad final (con penalización)
