@@ -30,6 +30,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
     {
         private EngineConfig _config;
         private ILogger _logger;
+        private IBarDataProvider _barData;
 
         public string ComponentName => "ContextManager";
 
@@ -48,6 +49,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 throw new ArgumentNullException(nameof(barData));
             if (coreEngine == null)
                 throw new ArgumentNullException(nameof(coreEngine));
+
+            _barData = barData; // Guardar para uso en CalculateGlobalBias
 
             _logger.Debug("[ContextManager] Construyendo contexto del mercado...");
 
@@ -120,56 +123,56 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         }
 
         /// <summary>
-        /// CALIBRACIÓN V5 (FINAL - ÓPTIMA): Calcula el GlobalBias y GlobalBiasStrength basado en BOS/CHoCH recientes
-        /// Este método original demostró ser el más efectivo (PF 2.00, Win Rate 42.9%)
+        /// CALIBRACIÓN V5.5: Calcula el GlobalBias y GlobalBiasStrength usando promedio de precios
+        /// Si Precio > Promedio(200 barras) => Bullish con Strength 1.0
+        /// Si Precio < Promedio(200 barras) => Bearish con Strength 1.0
+        /// 
+        /// FIX V5.5: Usar TF de 1H (60m) en lugar de Daily para cálculo más sensible
+        /// 200 barras de 1H = ~8 días (vs 200 días con Daily)
         /// </summary>
         private void CalculateGlobalBias(DecisionSnapshot snapshot, CoreEngine coreEngine, int currentBar)
         {
-            // Obtener el bias del CoreEngine (propiedad calculada por BOSDetector)
-            snapshot.GlobalBias = coreEngine.CurrentMarketBias; // "Bullish", "Bearish", "Neutral"
+            // V5.5: Usar TF de 1H (60m) para cálculo de bias más sensible
+            // 200 barras de 1H = ~8 días (captura tendencias de corto/medio plazo)
+            int primaryTF = 60; // 1H fijo para cálculo de bias
 
-            // GlobalBiasStrength: Proporción de breaks en la dirección del bias
-            // Rango: 0.0 (neutral/mixto) a 1.0 (todos los breaks en la misma dirección)
-            // Obtener BOS/CHoCH de todos los TFs
-            var recentBreaks = new List<StructureBase>();
-            foreach (int tf in _config.TimeframesToUse)
-            {
-                var structures = coreEngine.GetAllStructures(tf);
-                recentBreaks.AddRange(structures.Where(s =>
-                    (s.GetType().Name == "BOS" || s.GetType().Name == "CHoCH") &&
-                    (currentBar - s.CreatedAtBarIndex) <= _config.MaxRecentBreaksForBias
-                ));
-            }
-            
-            recentBreaks = recentBreaks
-                .OrderByDescending(s => s.CreatedAtBarIndex)
-                .Take(_config.MaxRecentBreaksForBias)
-                .ToList();
+            // CRÍTICO: Obtener CurrentPrice del MISMO TF que usamos para el promedio
+            double currentPrice = _barData.GetClose(primaryTF, currentBar);
+            double sumPrices = 0.0;
+            int period = 200;
+            int validBars = 0;
 
-            if (recentBreaks.Count == 0)
+            for (int i = 0; i < period && (currentBar - i) >= 0; i++)
             {
-                snapshot.GlobalBiasStrength = 0.0;
-                _logger.Debug("[ContextManager] No hay breaks recientes, BiasStrength = 0.0");
-                return;
+                sumPrices += _barData.GetClose(primaryTF, currentBar - i);
+                validBars++;
             }
 
-            // Contar breaks bullish vs bearish
-            int bullishBreaks = recentBreaks.Count(s => GetStructureDirection(s) == "Bullish");
-            int bearishBreaks = recentBreaks.Count(s => GetStructureDirection(s) == "Bearish");
-            int totalBreaks = recentBreaks.Count;
+            double avgPrice = validBars > 0 ? sumPrices / validBars : currentPrice;
 
-            // Strength = proporción del tipo dominante
-            if (snapshot.GlobalBias == "Bullish")
-                snapshot.GlobalBiasStrength = (double)bullishBreaks / totalBreaks;
-            else if (snapshot.GlobalBias == "Bearish")
-                snapshot.GlobalBiasStrength = (double)bearishBreaks / totalBreaks;
+            // Determinar bias basado en posición relativa al promedio
+            if (currentPrice > avgPrice)
+            {
+                snapshot.GlobalBias = "Bullish";
+                snapshot.GlobalBiasStrength = 1.0; // Confianza máxima
+            }
+            else if (currentPrice < avgPrice)
+            {
+                snapshot.GlobalBias = "Bearish";
+                snapshot.GlobalBiasStrength = 1.0; // Confianza máxima
+            }
             else
-                snapshot.GlobalBiasStrength = 0.5; // Neutral = 50%
+            {
+                snapshot.GlobalBias = "Neutral";
+                snapshot.GlobalBiasStrength = 0.0; // Sin sesgo
+            }
 
             _logger.Debug(string.Format(
-                "[ContextManager] GlobalBias: {0}, Strength: {1:F2} (Bullish: {2}, Bearish: {3})",
-                snapshot.GlobalBias, snapshot.GlobalBiasStrength, bullishBreaks, bearishBreaks
+                "[ContextManager] V5.5 - GlobalBias: {0}, Strength: {1:F2} (Precio: {2:F2}, Avg200@{3}m: {4:F2})",
+                snapshot.GlobalBias, snapshot.GlobalBiasStrength, currentPrice, primaryTF, avgPrice
             ));
+            _logger.Info(string.Format("[DIAGNOSTICO][Context] Bias={0} Strength={1:F2} Close60>{2}={3}",
+                snapshot.GlobalBias, snapshot.GlobalBiasStrength, "Avg200", currentPrice > avgPrice));
         }
 
         /// <summary>

@@ -1,257 +1,267 @@
-# 🎯 SUITE COMPLETA DE KPIs - PINKBUTTERFLY
+# 📊 KPI Suite Completa - Versión 2
+**PinkButterfly CoreBrain - Análisis de Backtest**
 
-## 📊 6 SCRIPTS PARA ANÁLISIS CIENTÍFICO
-
-Basándome en los datos extraídos manualmente del log, aquí están los KPIs reales:
-
----
-
-## 1️⃣ ANÁLISIS DE PERFORMANCE
-
-### **KPI 1.1: DEGRADACIÓN DE VELOCIDAD**
-
-| Rango de Barras | Estructuras | Tiempo | Velocidad (seg/barra) | Degradación |
-|-----------------|-------------|--------|-----------------------|-------------|
-| 0-1000 | 6,293 | ~15 min | 0.90 | Baseline |
-| 1000-2000 | 12,724 | ~25 min | 1.50 | **+67%** 🔴 |
-| 2000-3000 | 15,787 | ~30 min | 1.80 | **+100%** 🔴 |
-| 3000-3582 | 18,897 | ~20 min | 2.06 | **+129%** 🔴 |
-
-**Conclusión:** Degradación exponencial confirmada. Velocidad cae un **129%** en 3,582 barras.
+**Fecha:** 2025-10-28 15:27:26  
+**CSV File:** `.\logs\trades_20251028_151741.csv`  
+**Trades Analizados:** 128
+  
+**Última Operación Cerrada:** T0127 - BUY - 2025-10-28 14:15:00
 
 ---
 
-### **KPI 1.2: CRECIMIENTO DE ESTRUCTURAS**
+# 🎯 RESUMEN EJECUTIVO
 
-| Barra | Estructuras | Ratio (Est/Barra) | Guardado JSON (MB) |
-|-------|-------------|-------------------|-------------------|
-| 1000 | 6,293 | 6.29 | 41 |
-| 2000 | 12,724 | 6.36 | 136 |
-| 3000 | 15,787 | 5.26 | 182 |
-| 3582 | 18,897 | 5.28 | 207 |
+## Operaciones
 
-**Conclusión:** Ratio estable en ~5-6 estructuras/barra (debería ser 2-3). Sin purga efectiva.
+| Métrica | Valor |
+|---------|-------|
+| **Operaciones Registradas** | 128 |
+| **Operaciones Ejecutadas (Cerradas)** | 86 |
+| **Operaciones Canceladas** | 19 |
+| **Operaciones Expiradas** | 22 |
+| **Operaciones Pendientes** | 1 |
 
----
+## Rentabilidad
 
-### **KPI 1.3: DESGLOSE DEL JSON (Estimado)**
-
-Basándome en logs anteriores y el ratio de detección:
-
-| Tipo de Estructura | Cantidad Estimada | Porcentaje | Problema |
-|--------------------|-------------------|------------|----------|
-| **SwingInfo** | ~9,000 | 47.6% | 🔴 Excesivo (ruido fractal) |
-| **FVGInfo** | ~3,500 | 18.5% | ⚠️ Alto |
-| **OrderBlockInfo** | ~2,500 | 13.2% | ✅ Razonable |
-| **POIInfo** | ~1,500 | 7.9% | ✅ Razonable |
-| **BOSInfo** | ~1,200 | 6.3% | ✅ Razonable |
-| **LiquidityVoidInfo** | ~800 | 4.2% | ✅ Razonable |
-| **LiquidityGrabInfo** | ~400 | 2.1% | ✅ Razonable |
-| **Otros** | ~97 | 0.5% | ✅ Razonable |
-
-**Conclusión:** **47.6% son Swings** (ruido). Necesita purga agresiva.
+| Métrica | Valor |
+|---------|-------|
+| **Win Rate** | 45.3% (39/86) |
+| **Profit Factor** | 1.19 |
+| **P&L Total (Puntos)** | +78.20 |
+| **P&L Total (USD)** | $+391.00 |
+| **Gross Profit** | $2449.25 |
+| **Gross Loss** | $2058.25 |
+| **Avg Win** | $62.80 |
+| **Avg Loss** | $43.79 |
+| **Avg R:R (Planned)** | 1.84 |
 
 ---
 
-## 2️⃣ ANÁLISIS DE RENTABILIDAD
+# 💰 ANÁLISIS DE RENTABILIDAD
 
-### **KPI 2.1: TRADE BOOK (CSV MAESTRO)**
+## Trade Book (Libro de Operaciones)
 
-Basándome en la extracción manual del log:
+### Operaciones Cerradas (86 total)
 
-| # | Action | Entry | SL | TP | Status | Exit Reason | Entry Bar | Exit Bar | P&L (pts) | R:R |
-|---|--------|-------|----|----|--------|-------------|-----------|----------|-----------|-----|
-| 1 | BUY | 6470.25 | 6390.80 | 6474.25 | CLOSED | TP_HIT | 964 | 983 | +4.00 | 0.05 |
-| 2 | BUY | 6524.50 | 6447.80 | 6530.00 | CLOSED | TP_HIT | 1122 | 1140 | +5.50 | 0.07 |
-| 3 | SELL | 6536.75 | 6546.75 | 6519.75 | CLOSED | TP_HIT | 1237 | 1254 | +17.00 | 1.70 |
-| 4 | BUY | 6534.04 | 6447.80 | 6549.75 | CLOSED | TP_HIT | 1303 | 1312 | +15.71 | 0.18 |
-| 5 | SELL | 6552.25 | 6556.20 | 6519.75 | CLOSED | TP_HIT | 1336 | 1346 | +32.50 | 8.23 |
-| 6 | SELL | 6519.50 | 6525.45 | 6463.00 | CLOSED | SL_HIT | 1426 | 1442 | -5.95 | N/A |
-| 7 | BUY | 6522.25 | 6519.25 | 6546.75 | CLOSED | SL_HIT | 1510 | 1522 | -3.00 | N/A |
-| 8 | BUY | 6522.25 | 6519.25 | 6546.75 | CLOSED | SL_HIT | 1512 | 1524 | -3.00 | N/A |
-| 9 | BUY | 6522.25 | 6519.25 | 6546.75 | CLOSED | SL_HIT | 1514 | 1526 | -3.00 | N/A |
-| 10 | SELL | 6460.50 | 6463.50 | 6444.50 | CLOSED | TP_HIT | 1713 | 1727 | +16.00 | 5.33 |
-| 11 | BUY | 6451.50 | 6444.30 | 6466.75 | CLOSED | SL_HIT | 1757 | 1767 | -7.20 | N/A |
-| 12 | SELL | 6504.50 | 6525.45 | 6463.00 | CLOSED | SL_HIT | 2004 | 2015 | -20.95 | N/A |
-| 13 | BUY | 6510.98 | 6447.80 | 6530.00 | CLOSED | TP_HIT | 2006 | 2020 | +19.02 | 0.30 |
-| 14 | BUY | 6548.25 | 6544.30 | 6558.00 | CLOSED | TP_HIT | 2099 | 2110 | +9.75 | 2.47 |
-| 15 | BUY | 6548.25 | 6544.30 | 6558.00 | CLOSED | SL_HIT | 2101 | 2113 | -3.95 | N/A |
-| 16 | BUY | 6487.00 | 6447.80 | 6499.25 | CLOSED | TP_HIT | 2494 | 2507 | +12.25 | 0.31 |
-| 17 | BUY | 6521.75 | 6519.25 | 6546.75 | CLOSED | SL_HIT | 2570 | 2581 | -2.50 | N/A |
-| 18 | BUY | 6524.87 | 6519.25 | 6546.75 | CLOSED | SL_HIT | 2609 | 2620 | -5.62 | N/A |
-| 19 | BUY | 6583.50 | 6579.30 | 6600.00 | CLOSED | TP_HIT | 2699 | 2710 | +16.50 | 3.93 |
-| 20 | SELL | 6530.67 | 6533.67 | 6519.75 | CLOSED | SL_HIT | 2736 | 2747 | -3.00 | N/A |
-| 21 | BUY | 6586.75 | 6579.30 | 6600.00 | CLOSED | TP_HIT | 2951 | 2962 | +13.25 | 1.78 |
-| 22 | SELL | 6588.78 | 6600.00 | 6519.75 | CLOSED | SL_HIT | 2969 | 2980 | -11.22 | N/A |
-| 23 | BUY | 6609.25 | 6579.30 | 6650.50 | CLOSED | TP_HIT | 3069 | 3080 | +41.25 | 1.38 |
-| 24 | BUY | 6650.50 | 6579.30 | 6697.00 | CLOSED | TP_HIT | 3182 | 3193 | +46.50 | 0.65 |
-| 25 | BUY | 6652.50 | 6579.30 | 6697.00 | CLOSED | TP_HIT | 3230 | 3241 | +44.50 | 0.61 |
-| 26 | BUY | 6687.25 | 6579.30 | 6697.00 | CLOSED | TP_HIT | 3325 | 3336 | +9.75 | 0.09 |
-| 27 | BUY | 6684.50 | 6579.30 | 6697.00 | CLOSED | TP_HIT | 3508 | 3519 | +12.50 | 0.12 |
+| Trade ID | Dir | Entry | SL | TP | Exit | Resultado | P&L (pts) | P&L ($) | R:R Plan | Entry Date | Exit Date |
+|----------|-----|-------|----|----|------|-----------|-----------|---------|----------|------------|-----------|
+| T0003 | BUY | 6536.25 | 6531.25 | 6548.50 | 6548.50 | [TP] TP | +12.25 | $+61.25 | 2.45 | 2025-08-14 16:15:00 | 2025-08-14 17:00:00 |
+| T0005 | SELL | 6531.00 | 6545.95 | 6509.75 | 6545.95 | [SL] SL | -14.95 | $-74.75 | 1.42 | 2025-08-14 18:15:00 | 2025-08-14 19:30:00 |
+| T0006 | BUY | 6554.75 | 6544.05 | 6565.45 | 6544.05 | [SL] SL | -10.70 | $-53.50 | 1.00 | 2025-08-15 08:15:00 | 2025-08-15 15:45:00 |
+| T0007 | BUY | 6523.75 | 6510.55 | 6536.95 | 6510.55 | [SL] SL | -13.20 | $-66.00 | 1.00 | 2025-08-19 16:15:00 | 2025-08-19 16:45:00 |
+| T0008 | SELL | 6444.25 | 6447.25 | 6441.25 | 6447.25 | [SL] SL | -3.00 | $-15.00 | 1.00 | 2025-08-20 17:15:00 | 2025-08-20 17:45:00 |
+| T0009 | SELL | 6444.25 | 6447.25 | 6437.50 | 6447.25 | [SL] SL | -3.00 | $-15.00 | 2.25 | 2025-08-20 20:15:00 | 2025-08-20 20:45:00 |
+| T0011 | BUY | 6528.75 | 6525.75 | 6550.25 | 6525.75 | [SL] SL | -3.00 | $-15.00 | 7.17 | 2025-08-25 02:30:00 | 2025-08-25 11:15:00 |
+| T0012 | BUY | 6525.25 | 6522.25 | 6528.25 | 6522.25 | [SL] SL | -3.00 | $-15.00 | 1.00 | 2025-08-25 11:15:00 | 2025-08-25 12:30:00 |
+| T0013 | BUY | 6520.25 | 6517.25 | 6544.00 | 6517.25 | [SL] SL | -3.00 | $-15.00 | 7.92 | 2025-08-25 12:30:00 | 2025-08-25 22:00:00 |
+| T0014 | BUY | 6511.25 | 6507.00 | 6526.25 | 6507.00 | [SL] SL | -4.25 | $-21.25 | 3.53 | 2025-08-25 22:00:00 | 2025-08-26 02:15:00 |
+| T0015 | BUY | 6522.00 | 6509.55 | 6534.45 | 6534.45 | [TP] TP | +12.45 | $+62.25 | 1.00 | 2025-08-26 02:15:00 | 2025-08-26 21:45:00 |
+| T0016 | BUY | 6541.75 | 6531.75 | 6551.75 | 6531.75 | [SL] SL | -10.00 | $-50.00 | 1.00 | 2025-08-27 00:45:00 | 2025-08-27 15:30:00 |
+| T0017 | BUY | 6530.75 | 6526.00 | 6545.75 | 6545.75 | [TP] TP | +15.00 | $+75.00 | 3.16 | 2025-08-27 15:30:00 | 2025-08-27 16:30:00 |
+| T0019 | BUY | 6563.50 | 6548.55 | 6578.45 | 6578.45 | [TP] TP | +14.95 | $+74.75 | 1.00 | 2025-08-28 17:15:00 | 2025-08-28 22:00:00 |
+| T0020 | BUY | 6563.50 | 6558.55 | 6568.75 | 6558.55 | [SL] SL | -4.95 | $-24.75 | 1.06 | 2025-08-29 07:15:00 | 2025-08-29 10:15:00 |
+| T0026 | BUY | 6520.75 | 6509.30 | 6532.20 | 6509.30 | [SL] SL | -11.45 | $-57.25 | 1.00 | 2025-09-03 16:45:00 | 2025-09-03 17:30:00 |
+| T0027 | BUY | 6521.00 | 6509.30 | 6532.70 | 6532.70 | [TP] TP | +11.70 | $+58.50 | 1.00 | 2025-09-04 00:15:00 | 2025-09-04 16:45:00 |
+| T0029 | BUY | 6576.75 | 6566.00 | 6587.50 | 6587.50 | [TP] TP | +10.75 | $+53.75 | 1.00 | 2025-09-05 04:45:00 | 2025-09-05 08:30:00 |
+| T0030 | BUY | 6584.00 | 6571.05 | 6596.95 | 6571.05 | [SL] SL | -12.95 | $-64.75 | 1.00 | 2025-09-05 08:45:00 | 2025-09-05 14:30:00 |
+| T0031 | BUY | 6574.00 | 6569.50 | 6578.50 | 6578.50 | [TP] TP | +4.50 | $+22.50 | 1.00 | 2025-09-05 14:30:00 | 2025-09-05 15:00:00 |
+| T0032 | BUY | 6565.25 | 6554.00 | 6576.50 | 6554.00 | [SL] SL | -11.25 | $-56.25 | 1.00 | 2025-09-05 16:15:00 | 2025-09-05 16:45:00 |
+| T0033 | BUY | 6537.75 | 6534.75 | 6576.75 | 6534.75 | [SL] SL | -3.00 | $-15.00 | 13.00 | 2025-09-05 17:45:00 | 2025-09-05 18:15:00 |
+| T0034 | BUY | 6537.75 | 6534.75 | 6577.75 | 6534.75 | [SL] SL | -3.00 | $-15.00 | 13.33 | 2025-09-05 18:15:00 | 2025-09-05 18:45:00 |
+| T0036 | BUY | 6537.75 | 6527.30 | 6583.00 | 6583.00 | [TP] TP | +45.25 | $+226.25 | 4.33 | 2025-09-05 22:15:00 | 2025-09-09 22:00:00 |
+| T0038 | BUY | 6596.75 | 6583.05 | 6610.45 | 6610.45 | [TP] TP | +13.70 | $+68.50 | 1.00 | 2025-09-10 08:30:00 | 2025-09-10 14:45:00 |
+| T0039 | BUY | 6590.75 | 6583.00 | 6598.50 | 6583.00 | [SL] SL | -7.75 | $-38.75 | 1.00 | 2025-09-10 18:45:00 | 2025-09-10 21:15:00 |
+| T0040 | BUY | 6582.00 | 6578.50 | 6596.75 | 6596.75 | [TP] TP | +14.75 | $+73.75 | 4.21 | 2025-09-10 21:15:00 | 2025-09-10 22:00:00 |
+| T0041 | BUY | 6595.75 | 6585.80 | 6605.70 | 6605.70 | [TP] TP | +9.95 | $+49.75 | 1.00 | 2025-09-10 22:15:00 | 2025-09-11 08:45:00 |
+| T0043 | BUY | 6641.75 | 6638.75 | 6644.75 | 6638.75 | [SL] SL | -3.00 | $-15.00 | 1.00 | 2025-09-12 01:15:00 | 2025-09-12 10:15:00 |
+| T0044 | BUY | 6643.75 | 6639.25 | 6648.25 | 6648.25 | [TP] TP | +4.50 | $+22.50 | 1.00 | 2025-09-12 10:30:00 | 2025-09-12 15:15:00 |
+| T0047 | BUY | 6666.75 | 6653.55 | 6679.95 | 6679.95 | [TP] TP | +13.20 | $+66.00 | 1.00 | 2025-09-15 16:15:00 | 2025-09-15 22:00:00 |
+| T0049 | BUY | 6687.25 | 6672.80 | 6701.70 | 6672.80 | [SL] SL | -14.45 | $-72.25 | 1.00 | 2025-09-16 08:30:00 | 2025-09-16 16:00:00 |
+| T0050 | BUY | 6672.75 | 6669.75 | 6678.50 | 6669.75 | [SL] SL | -3.00 | $-15.00 | 1.92 | 2025-09-16 16:00:00 | 2025-09-16 16:30:00 |
+| T0051 | BUY | 6670.25 | 6660.50 | 6689.00 | 6660.50 | [SL] SL | -9.75 | $-48.75 | 1.92 | 2025-09-16 17:00:00 | 2025-09-17 10:45:00 |
+| T0052 | SELL | 6665.25 | 6679.50 | 6651.00 | 6651.00 | [TP] TP | +14.25 | $+71.25 | 1.00 | 2025-09-17 11:30:00 | 2025-09-17 18:45:00 |
+| T0053 | SELL | 6664.00 | 6678.75 | 6649.25 | 6649.25 | [TP] TP | +14.75 | $+73.75 | 1.00 | 2025-09-17 20:30:00 | 2025-09-17 21:00:00 |
+| T0054 | SELL | 6679.00 | 6686.95 | 6663.75 | 6686.95 | [SL] SL | -7.95 | $-39.75 | 1.92 | 2025-09-17 21:30:00 | 2025-09-18 04:45:00 |
+| T0056 | BUY | 6710.00 | 6703.50 | 6716.50 | 6716.50 | [TP] TP | +6.50 | $+32.50 | 1.00 | 2025-09-18 12:30:00 | 2025-09-18 13:15:00 |
+| T0057 | BUY | 6711.00 | 6703.50 | 6718.50 | 6703.50 | [SL] SL | -7.50 | $-37.50 | 1.00 | 2025-09-18 13:15:00 | 2025-09-18 14:45:00 |
+| T0059 | BUY | 6709.75 | 6706.75 | 6712.75 | 6706.75 | [SL] SL | -3.00 | $-15.00 | 1.00 | 2025-09-18 16:15:00 | 2025-09-18 16:45:00 |
+| T0060 | BUY | 6708.25 | 6705.25 | 6717.25 | 6705.25 | [SL] SL | -3.00 | $-15.00 | 3.00 | 2025-09-18 16:45:00 | 2025-09-18 17:45:00 |
+| T0062 | BUY | 6719.75 | 6708.30 | 6731.20 | 6708.30 | [SL] SL | -11.45 | $-57.25 | 1.00 | 2025-09-19 21:30:00 | 2025-09-22 09:15:00 |
+| T0063 | BUY | 6697.25 | 6687.05 | 6712.25 | 6712.25 | [TP] TP | +15.00 | $+75.00 | 1.47 | 2025-09-22 09:15:00 | 2025-09-22 15:45:00 |
+| T0064 | BUY | 6752.25 | 6744.05 | 6760.45 | 6744.05 | [SL] SL | -8.20 | $-41.00 | 1.00 | 2025-09-23 04:00:00 | 2025-09-23 13:15:00 |
+| T0065 | BUY | 6749.50 | 6742.50 | 6756.50 | 6756.50 | [TP] TP | +7.00 | $+35.00 | 1.00 | 2025-09-23 13:15:00 | 2025-09-23 16:00:00 |
+| T0066 | BUY | 6745.00 | 6741.00 | 6752.25 | 6741.00 | [SL] SL | -4.00 | $-20.00 | 1.81 | 2025-09-23 16:00:00 | 2025-09-23 17:45:00 |
+| T0069 | SELL | 6694.50 | 6705.45 | 6683.55 | 6683.55 | [TP] TP | +10.95 | $+54.75 | 1.00 | 2025-09-25 06:30:00 | 2025-09-25 12:30:00 |
+| T0070 | SELL | 6664.50 | 6678.00 | 6651.00 | 6678.00 | [SL] SL | -13.50 | $-67.50 | 1.00 | 2025-09-26 10:15:00 | 2025-09-26 14:45:00 |
+| T0071 | BUY | 6723.75 | 6714.80 | 6732.70 | 6732.70 | [TP] TP | +8.95 | $+44.75 | 1.00 | 2025-09-29 12:15:00 | 2025-09-29 15:00:00 |
+| T0072 | BUY | 6727.50 | 6714.80 | 6740.20 | 6714.80 | [SL] SL | -12.70 | $-63.50 | 1.00 | 2025-09-29 15:30:00 | 2025-09-29 17:30:00 |
+| T0073 | BUY | 6723.50 | 6714.80 | 6732.20 | 6732.20 | [TP] TP | +8.70 | $+43.50 | 1.00 | 2025-09-29 17:30:00 | 2025-09-30 21:30:00 |
+| T0074 | BUY | 6723.25 | 6720.25 | 6726.25 | 6726.25 | [TP] TP | +3.00 | $+15.00 | 1.00 | 2025-09-30 21:30:00 | 2025-09-30 23:00:00 |
+| T0076 | BUY | 6724.50 | 6711.55 | 6737.45 | 6711.55 | [SL] SL | -12.95 | $-64.75 | 1.00 | 2025-10-01 15:45:00 | 2025-10-01 16:15:00 |
+| T0078 | BUY | 6756.50 | 6753.50 | 6769.25 | 6769.25 | [TP] TP | +12.75 | $+63.75 | 4.25 | 2025-10-01 22:15:00 | 2025-10-02 03:15:00 |
+| T0079 | BUY | 6767.50 | 6755.80 | 6779.20 | 6779.20 | [TP] TP | +11.70 | $+58.50 | 1.00 | 2025-10-02 04:45:00 | 2025-10-02 14:15:00 |
+| T0080 | BUY | 6775.50 | 6763.30 | 6787.70 | 6763.30 | [SL] SL | -12.20 | $-61.00 | 1.00 | 2025-10-02 14:15:00 | 2025-10-02 16:00:00 |
+| T0082 | BUY | 6781.25 | 6766.80 | 6795.70 | 6766.80 | [SL] SL | -14.45 | $-72.25 | 1.00 | 2025-10-03 07:15:00 | 2025-10-03 15:00:00 |
+| T0083 | BUY | 6781.75 | 6771.80 | 6791.70 | 6791.70 | [TP] TP | +9.95 | $+49.75 | 1.00 | 2025-10-03 15:00:00 | 2025-10-03 16:45:00 |
+| T0087 | BUY | 6787.50 | 6776.05 | 6798.95 | 6776.05 | [SL] SL | -11.45 | $-57.25 | 1.00 | 2025-10-06 01:45:00 | 2025-10-06 09:45:00 |
+| T0088 | BUY | 6782.50 | 6774.55 | 6790.45 | 6790.45 | [TP] TP | +7.95 | $+39.75 | 1.00 | 2025-10-06 09:45:00 | 2025-10-06 12:45:00 |
+| T0089 | BUY | 6776.50 | 6771.55 | 6783.00 | 6771.55 | [SL] SL | -4.95 | $-24.75 | 1.31 | 2025-10-06 13:15:00 | 2025-10-06 16:00:00 |
+| T0090 | BUY | 6773.75 | 6766.05 | 6783.50 | 6783.50 | [TP] TP | +9.75 | $+48.75 | 1.27 | 2025-10-06 16:30:00 | 2025-10-06 17:15:00 |
+| T0091 | BUY | 6793.75 | 6781.30 | 6806.20 | 6781.30 | [SL] SL | -12.45 | $-62.25 | 1.00 | 2025-10-06 17:45:00 | 2025-10-07 01:00:00 |
+| T0094 | BUY | 6798.75 | 6784.05 | 6813.45 | 6784.05 | [SL] SL | -14.70 | $-73.50 | 1.00 | 2025-10-07 15:15:00 | 2025-10-07 16:30:00 |
+| T0096 | SELL | 6766.75 | 6775.50 | 6755.75 | 6775.50 | [SL] SL | -8.75 | $-43.75 | 1.26 | 2025-10-08 07:15:00 | 2025-10-08 13:15:00 |
+| T0100 | BUY | 6804.75 | 6792.05 | 6817.45 | 6792.05 | [SL] SL | -12.70 | $-63.50 | 1.00 | 2025-10-09 03:45:00 | 2025-10-09 16:00:00 |
+| T0104 | BUY | 6795.75 | 6783.05 | 6808.45 | 6783.05 | [SL] SL | -12.70 | $-63.50 | 1.00 | 2025-10-10 15:45:00 | 2025-10-10 17:00:00 |
+| T0106 | SELL | 6695.00 | 6708.50 | 6680.75 | 6708.50 | [SL] SL | -13.50 | $-67.50 | 1.06 | 2025-10-13 19:00:00 | 2025-10-14 02:30:00 |
+| T0107 | SELL | 6709.50 | 6719.00 | 6690.25 | 6690.25 | [TP] TP | +19.25 | $+96.25 | 2.03 | 2025-10-14 02:45:00 | 2025-10-14 06:15:00 |
+| T0108 | SELL | 6667.75 | 6682.00 | 6653.50 | 6653.50 | [TP] TP | +14.25 | $+71.25 | 1.00 | 2025-10-14 07:00:00 | 2025-10-14 07:45:00 |
+| T0109 | SELL | 6648.75 | 6659.20 | 6637.75 | 6637.75 | [TP] TP | +11.00 | $+55.00 | 1.05 | 2025-10-14 08:30:00 | 2025-10-14 09:15:00 |
+| T0110 | SELL | 6623.00 | 6634.25 | 6611.75 | 6611.75 | [TP] TP | +11.25 | $+56.25 | 1.00 | 2025-10-14 09:45:00 | 2025-10-14 13:00:00 |
+| T0112 | SELL | 6628.75 | 6631.75 | 6625.00 | 6631.75 | [SL] SL | -3.00 | $-15.00 | 1.25 | 2025-10-17 07:45:00 | 2025-10-17 08:15:00 |
+| T0113 | SELL | 6604.75 | 6616.00 | 6586.75 | 6616.00 | [SL] SL | -11.25 | $-56.25 | 1.60 | 2025-10-17 12:45:00 | 2025-10-17 13:15:00 |
+| T0114 | BUY | 6775.50 | 6762.05 | 6788.95 | 6762.05 | [SL] SL | -13.45 | $-67.25 | 1.00 | 2025-10-21 02:00:00 | 2025-10-21 16:00:00 |
+| T0115 | BUY | 6770.00 | 6758.80 | 6781.20 | 6781.20 | [TP] TP | +11.20 | $+56.00 | 1.00 | 2025-10-22 00:45:00 | 2025-10-22 06:15:00 |
+| T0116 | BUY | 6775.25 | 6764.05 | 6790.00 | 6764.05 | [SL] SL | -11.20 | $-56.00 | 1.32 | 2025-10-22 10:15:00 | 2025-10-22 15:45:00 |
+| T0117 | SELL | 6744.25 | 6756.25 | 6732.25 | 6756.25 | [SL] SL | -12.00 | $-60.00 | 1.00 | 2025-10-22 16:45:00 | 2025-10-22 17:15:00 |
+| T0119 | SELL | 6736.25 | 6747.00 | 6725.50 | 6725.50 | [TP] TP | +10.75 | $+53.75 | 1.00 | 2025-10-23 03:15:00 | 2025-10-23 14:00:00 |
+| T0120 | SELL | 6748.75 | 6754.75 | 6738.00 | 6754.75 | [SL] SL | -6.00 | $-30.00 | 1.79 | 2025-10-23 15:45:00 | 2025-10-23 16:30:00 |
+| T0122 | BUY | 6782.00 | 6776.55 | 6787.45 | 6787.45 | [TP] TP | +5.45 | $+27.25 | 1.00 | 2025-10-23 22:00:00 | 2025-10-24 05:30:00 |
+| T0123 | BUY | 6791.50 | 6776.55 | 6806.45 | 6806.45 | [TP] TP | +14.95 | $+74.75 | 1.00 | 2025-10-24 08:15:00 | 2025-10-24 14:45:00 |
+| T0124 | BUY | 6824.75 | 6811.05 | 6838.45 | 6838.45 | [TP] TP | +13.70 | $+68.50 | 1.00 | 2025-10-24 17:00:00 | 2025-10-24 17:30:00 |
+| T0125 | BUY | 6829.75 | 6815.30 | 6844.20 | 6844.20 | [TP] TP | +14.45 | $+72.25 | 1.00 | 2025-10-24 22:00:00 | 2025-10-26 23:30:00 |
+| T0126 | BUY | 6871.75 | 6868.50 | 6897.00 | 6897.00 | [TP] TP | +25.25 | $+126.25 | 7.77 | 2025-10-27 03:15:00 | 2025-10-27 19:45:00 |
+| T0127 | BUY | 6908.00 | 6893.80 | 6922.20 | 6922.20 | [TP] TP | +14.20 | $+71.00 | 1.00 | 2025-10-27 23:45:00 | 2025-10-28 14:15:00 |
 
-**Total Operaciones Cerradas:** 27  
-**Ganadoras (TP):** 16 (59.26%)  
-**Perdedoras (SL):** 11 (40.74%)  
 
-**P&L Total:**
-- Puntos Ganados: +316.03
-- Puntos Perdidos: -69.39
-- **Neto: +246.64 puntos**
-- **P&L MES:** +$1,233.20
-- **P&L ES:** +$12,332.00
-- **Profit Factor:** 4.56
+### Operaciones Canceladas (19 total)
 
----
+**Top 10 por R:R potencial:**
 
-### **KPI 2.2: ANÁLISIS DE CANCELACIONES**
+| Trade ID | Dir | Entry | SL | TP | R:R Plan | Entry Date | Razón |
+|----------|-----|-------|----|----|----------|------------|-------|
+| T0035 | BUY | 6551.75 | 6546.25 | 6598.50 | 8.50 | 2025-09-05 21:30:00 | BOS contradictorio |
+| T0004 | BUY | 6525.25 | 6522.25 | 6543.00 | 5.92 | 2025-08-14 17:30:00 | BOS contradictorio |
+| T0021 | BUY | 6549.75 | 6542.25 | 6572.00 | 2.97 | 2025-08-29 12:30:00 | BOS contradictorio |
+| T0121 | SELL | 6741.00 | 6753.00 | 6719.75 | 1.77 | 2025-10-23 16:30:00 | BOS contradictorio |
+| T0022 | BUY | 6557.25 | 6545.30 | 6575.75 | 1.55 | 2025-08-29 13:30:00 | BOS contradictorio |
+| T0010 | SELL | 6437.75 | 6451.45 | 6420.50 | 1.26 | 2025-08-22 09:15:00 | BOS contradictorio |
+| T0097 | SELL | 6770.00 | 6779.50 | 6759.25 | 1.13 | 2025-10-08 16:00:00 | BOS contradictorio |
+| T0085 | BUY | 6780.25 | 6766.05 | 6795.75 | 1.09 | 2025-10-03 20:30:00 | BOS contradictorio |
+| T0023 | BUY | 6566.50 | 6563.50 | 6569.50 | 1.00 | 2025-08-29 15:15:00 | BOS contradictorio |
+| T0024 | BUY | 6504.50 | 6490.05 | 6518.95 | 1.00 | 2025-09-03 12:00:00 | BOS contradictorio |
 
-| Exit Reason | Cantidad | Porcentaje |
-|-------------|----------|------------|
-| **BOS_CONTRARY** | 143 | 61.1% 🟢 |
-| **SCORE_DECAY** | 60 | 25.6% 🟢 |
-| **EXECUTED** | 31 | 13.2% ✅ |
 
-**Conclusión:** El 86.7% de señales se filtran correctamente. Sistema de gestión de riesgo funcionando perfectamente.
+### Operaciones Expiradas (22 total)
 
----
+**Top 10 por R:R potencial:**
 
-### **KPI 2.3: DESGLOSE DE CONFIANZA**
+| Trade ID | Dir | Entry | SL | TP | R:R Plan | Entry Date | Razón |
+|----------|-----|-------|----|----|----------|------------|-------|
+| T0075 | BUY | 6723.25 | 6720.05 | 6743.75 | 6.41 | 2025-10-01 02:15:00 | estructura no existe |
+| T0045 | BUY | 6635.50 | 6632.50 | 6648.00 | 4.17 | 2025-09-12 15:45:00 | score decayó a 0 |
+| T0055 | BUY | 6676.75 | 6673.75 | 6684.50 | 2.58 | 2025-09-18 07:30:00 | score decayó a 0 |
+| T0068 | SELL | 6705.75 | 6719.45 | 6681.25 | 1.79 | 2025-09-24 22:15:00 | estructura no existe |
+| T0002 | BUY | 6521.50 | 6517.55 | 6527.75 | 1.58 | 2025-08-13 17:15:00 | estructura no existe |
+| T0118 | SELL | 6762.25 | 6776.95 | 6739.50 | 1.55 | 2025-10-22 17:15:00 | estructura no existe |
+| T0111 | SELL | 6648.75 | 6657.25 | 6637.75 | 1.29 | 2025-10-14 16:45:00 | estructura no existe |
+| T0046 | BUY | 6639.75 | 6632.55 | 6648.00 | 1.15 | 2025-09-15 01:30:00 | estructura no existe |
+| T0048 | BUY | 6663.50 | 6650.80 | 6677.00 | 1.06 | 2025-09-16 01:00:00 | estructura no existe |
+| T0042 | BUY | 6606.00 | 6593.55 | 6618.75 | 1.02 | 2025-09-11 15:15:00 | Distancia: 36 |
 
-Basándome en los logs de debug extraídos:
 
-| Factor | Contribución Promedio | Peso Actual | Evaluación |
-|--------|----------------------|-------------|------------|
-| **CoreScore** | 0.35 | 0.40 | ✅ Bien calibrado |
-| **Proximity** | 0.08 | 0.25 | 🔴 Peso muy alto vs contribución |
-| **Confluence** | 0.05 | 0.05 | ✅ Bien calibrado |
-| **Type** | 0.07 | 0.10 | ⚠️ Ligeramente alto |
-| **Bias** | 0.06 | 0.20 | 🔴 Peso muy alto vs contribución |
-| **Momentum** | 0.00 | 0.00 | ✅ Desactivado |
-| **Volume** | 0.00 | 0.00 | ✅ Desactivado |
+## KPI 2.2: Razones de Cancelación y Expiración
 
-**Conclusión:** 
-- **Proximity** contribuye solo 0.08 pero tiene peso 0.25 (3x más de lo necesario)
-- **Bias** contribuye solo 0.06 pero tiene peso 0.20 (3.3x más de lo necesario)
-- **CoreScore** es el factor más importante y está bien calibrado
+### Cancelaciones (19 total)
 
----
+| Razón | Cantidad | % |
+|-------|----------|---|
+| BOS contradictorio | 19 | 100.0% |
 
-## 🎯 CONCLUSIONES CIENTÍFICAS
 
-### **PERFORMANCE:**
+### Expiraciones (22 total)
 
-1. **Degradación Exponencial Confirmada:** Velocidad cae 129% en 3,582 barras
-2. **Causa Raíz:** 47.6% de estructuras son Swings (ruido fractal)
-3. **Solución:** Purga agresiva de Swings + Detectores más restrictivos
+| Razón | Cantidad | % |
+|-------|----------|---|
+| estructura no existe | 14 | 63.6% |
+| score decayó a 0 | 5 | 22.7% |
+| Distancia: 34 | 1 | 4.5% |
+| Distancia: 36 | 1 | 4.5% |
+| Distancia: 30 | 1 | 4.5% |
 
-### **RENTABILIDAD:**
 
-1. **Win Rate:** 59.26% ✅ (por encima del 50%)
-2. **Profit Factor:** 4.56 ✅ (excelente, > 2.0)
-3. **P&L Neto:** +$1,233 MES / +$12,332 ES ✅
-4. **Problema Crítico:** R:R inconsistente (0.05 - 8.23)
-   - Algunos SLs son absurdos (79-107 puntos)
-   - Causa: `RiskCalculator` usa Swings muy lejanos
 
-### **CALIBRACIÓN:**
 
-1. **Proximity:** Peso 3x más alto de lo necesario (0.25 → 0.08)
-2. **Bias:** Peso 3.3x más alto de lo necesario (0.20 → 0.06)
-3. **CoreScore:** Bien calibrado (mantener en 0.40)
+## KPI 2.3: Desglose de Contribuciones del DFM
 
----
+**Análisis de 1044 evaluaciones de HeatZones**
 
-## 📋 PLAN DE ACCIÓN BASADO EN DATOS
+### Contribuciones Promedio por Componente
 
-### **PRIORIDAD 1: OPTIMIZACIÓN DE PERFORMANCE** 🔥
+| Componente | Contribución Promedio | % del Total |
+|------------|----------------------|-------------|
+| **CoreScore** | 0.2488 | 32.8% |
+| **Proximity** | 0.1609 | 21.2% |
+| **Confluence** | 0.1492 | 19.7% |
+| **Type** | 0.0000 | 0.0% |
+| **Bias** | 0.2000 | 26.4% |
+| **Momentum** | 0.0000 | 0.0% |
+| **TOTAL (Avg Confidence)** | 0.7589 | 100% |
 
-```csharp
-// EngineConfig.cs
+### Resumen de Señales
 
-// Detectores más restrictivos
-MinFVGSizeATRfactor = 0.20;  // Era 0.12 → +67%
-MinSwingATRfactor = 0.15;    // Era 0.05 → +200% (CRÍTICO: reduce Swings)
-OBBodyMinATR = 0.8;          // Era 0.6 → +33%
+- **Evaluaciones totales:** 1044
+- **Señales generadas:** 1043 (99.9%)
+- **Señales rechazadas (WAIT):** 1 (0.1%)
 
-// Purga agresiva de Swings
-EnableAutoPurge = true;
-PurgeEveryNBars = 25;        // Cada 25 barras (vs 50)
-MaxStructureAgeBars = 150;   // 150 barras (vs 200)
-MinScoreToKeep = 0.20;       // Score mínimo 0.20 (vs 0.15)
-MaxStructuresPerTF = 300;    // Máximo 300 por TF (vs 500)
-```
+### Diagnóstico de Calibración
 
-**Impacto Esperado:** Reducir estructuras de 18,897 a ~6,000 (68% menos).
+**Componentes ordenados por contribución:**
 
----
+1. **CoreScore**: 0.2488
+2. **Bias**: 0.2000
+3. **Proximity**: 0.1609
+4. **Confluence**: 0.1492
+5. **Type**: 0.0000
+6. **Momentum**: 0.0000
 
-### **PRIORIDAD 2: CALIBRACIÓN DE PESOS** 🔥
+**Recomendaciones de calibración:**
 
-```csharp
-// EngineConfig.cs
-
-// Pesos recalibrados basados en contribución real
-Weight_CoreScore = 0.50;     // Era 0.40 → +25% (factor más importante)
-Weight_Proximity = 0.10;     // Era 0.25 → -60% (sobreponderado)
-Weight_Confluence = 0.10;    // Sin cambio
-Weight_Type = 0.10;          // Sin cambio
-Weight_Bias = 0.10;          // Era 0.20 → -50% (sobreponderado)
-Weight_Momentum = 0.10;      // Era 0.00 → Activar (puede ayudar)
-// SUMA = 1.00 ✅
-```
-
-**Impacto Esperado:** Mejorar Win Rate de 59% a 62-65%.
-
----
-
-### **PRIORIDAD 3: CORREGIR R:R ABSURDOS** ⚠️
-
-```csharp
-// EngineConfig.cs (NUEVO)
-
-// Límites de SL/TP
-MaxSLDistanceATR = 15.0;     // SL máximo: 15 ATR (vs infinito)
-MinTPDistanceATR = 2.0;      // TP mínimo: 2 ATR
-MinRiskRewardRatio = 1.0;    // R:R mínimo: 1.0
-```
-
-**Impacto Esperado:** Eliminar operaciones con R:R < 1.0 (7 de 27 operaciones).
-
----
-
-## 📊 PROYECCIÓN CON OPTIMIZACIONES
-
-| Métrica | Actual | Con Optimizaciones | Mejora |
-|---------|--------|-------------------|--------|
-| **Velocidad** | 1.5 seg/barra | 0.4 seg/barra | **+275%** |
-| **Estructuras** | 18,897 | ~6,000 | **-68%** |
-| **JSON** | 207 MB | ~60 MB | **-71%** |
-| **Tiempo (5000 barras)** | ~2 horas | ~33 min | **+264%** |
-| **Win Rate** | 59.26% | 62-65% | **+5-10%** |
-| **Profit Factor** | 4.56 | 5.0-6.0 | **+10-30%** |
-
----
-
-## ✅ VALIDACIÓN
-
-**El sistema PinkButterfly es RENTABLE:**
-- ✅ Win Rate: 59.26%
-- ✅ Profit Factor: 4.56
-- ✅ P&L: +$1,233 MES / +$12,332 ES
-- ✅ Gestión de Riesgo: 86.7% filtrado
-
-**Pero necesita optimización:**
-- 🔴 Performance: Muy lento (degradación 129%)
-- 🔴 R:R: Inconsistente (0.05 - 8.23)
-- 🔴 Calibración: Proximity y Bias sobreponderados
-
-**Con las optimizaciones propuestas, el sistema será:**
-- ✅ Rentable (Win Rate 62-65%, PF 5.0-6.0)
-- ✅ Rápido (0.4 seg/barra)
-- ✅ Escalable (5,000-10,000 barras)
-- ✅ Profesional (R:R consistente > 1.0)
 
 ---
 
-**Próximo paso:** Implementar las 3 prioridades y ejecutar backtest de validación.
+# 🎓 CONCLUSIONES Y RECOMENDACIONES
 
+## Diagnóstico
+
+### Rentabilidad
+
+- ⚠️ **ADVERTENCIA:** Win Rate bajo (45.3% < 50%)
+- **Acción sugerida:** Calibrar pesos del DFM
+
+- ⚠️ **ADVERTENCIA:** Profit Factor bajo (1.19 < 1.5)
+
+
+## Próximos Pasos
+
+1. **Análisis Profundo de Operaciones Perdedoras:**
+   - Activar `ShowScoringBreakdown = true`
+   - Ejecutar Fast Load
+   - Analizar scoring de las 47 operaciones con SL_HIT
+
+2. **Calibración del DFM:**
+   - Revisar pesos: CoreScore, Proximity, Bias, Confluence
+   - Ajustar basándose en análisis científico
+
+3. **Optimización de Gestión de Riesgo:**
+   - Revisar R:R promedio: 1.84
+   - Ajustar `MaxSLDistanceATR` y `MinTPDistanceATR`
+
+4. **Nuevo Backtest:**
+   - Aplicar cambios de calibración
+   - Ejecutar con `BacktestBarsForAnalysis = 5000`
+   - Comparar resultados
+
+---
+
+*Reporte generado automáticamente por el analizador de DFM v2.0*  
+*Fecha: 2025-10-28 15:27:26*
