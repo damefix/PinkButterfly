@@ -97,10 +97,26 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             HeatZone bestZone = null;
             double bestConfidence = 0.0;
             DecisionScoreBreakdown bestBreakdown = null;
+            int evalBull = 0, evalBear = 0, passed = 0;
+            int[] confBins = new int[10]; // 0.0-1.0 en pasos de 0.1
 
             foreach (var zone in validZones)
             {
                 var breakdown = CalculateConfidence(zone, snapshot, coreEngine, currentBar);
+                // Persistir confluenceScore crudo en metadata para trazabilidad en etapas posteriores (Risk)
+                double confluenceFactorRaw = Math.Min(1.0, (double)zone.ConfluenceCount / _config.MaxConfluenceReference);
+                zone.Metadata["ConfluenceScore"] = confluenceFactorRaw;
+                // Hard filter de confluencia (Quality Gate V5.7)
+                if (confluenceFactorRaw < _config.MinConfluenceForEntry)
+                {
+                    _logger.Warning(string.Format(
+                        "[DFM] ⚠ HeatZone {0} RECHAZADA: Baja confluencia ({1:F2} < {2:F2})",
+                        zone.Id, confluenceFactorRaw, _config.MinConfluenceForEntry));
+                    // Marcar como rechazada por confluencia baja para diagnóstico
+                    zone.Metadata["DFM_Rejected"] = true;
+                    zone.Metadata["DFM_RejectReason"] = string.Format("LowConfluence({0:F2}<{1:F2})", confluenceFactorRaw, _config.MinConfluenceForEntry);
+                    continue;
+                }
                 
                 // Almacenar breakdown en Metadata
                 zone.Metadata["ConfidenceBreakdown"] = breakdown;
@@ -112,12 +128,40 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     breakdown.ConfluenceContribution, breakdown.TypeContribution, breakdown.BiasContribution
                 ));
 
+                // Diagnóstico: dirección y bins
+                if (zone.Direction == "Bullish") evalBull++; else if (zone.Direction == "Bearish") evalBear++;
+                int bin = (int)Math.Min(9, Math.Floor(breakdown.FinalConfidence * 10.0));
+                confBins[bin]++;
+                if (breakdown.FinalConfidence >= _config.MinConfidenceForEntry) passed++;
+
                 // Actualizar mejor zona
                 if (breakdown.FinalConfidence > bestConfidence)
                 {
                     bestConfidence = breakdown.FinalConfidence;
                     bestZone = zone;
                     bestBreakdown = breakdown;
+                }
+            }
+
+            // Enforce Directional Policy (gating antes de decidir)
+            if (_config.EnforceDirectionalPolicy && bestZone != null && snapshot.GlobalBias != "Neutral" && snapshot.GlobalBiasStrength >= 0.7)
+            {
+                bool isCounterBias = bestZone.Direction != snapshot.GlobalBias;
+                if (isCounterBias)
+                {
+                    double extraConf = _config.CounterBiasMinExtraConfidence;
+                    double minConf = _config.MinConfidenceForEntry + extraConf;
+                    double rr = bestZone.Metadata.ContainsKey("ActualRR") ? (double)bestZone.Metadata["ActualRR"] : 0.0;
+                    if (bestConfidence < minConf || rr < _config.CounterBiasMinRR)
+                    {
+                        _logger.Info(string.Format(
+                            "[DecisionFusionModel] Policy: CONTRA-BIAS descartada. Conf={0:F3}(<{1:F3}) o R:R={2:F2}(<{3:F2})",
+                            bestConfidence, minConf, rr, _config.CounterBiasMinRR));
+                        // Forzar WAIT
+                        bestZone = null;
+                        bestConfidence = 0.0;
+                        bestBreakdown = null;
+                    }
                 }
             }
 
@@ -143,6 +187,11 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             {
                 _logger.Debug("[DecisionFusionModel] No se encontró una zona válida");
             }
+
+            // Resumen diagnóstico
+            _logger.Info(string.Format("[DIAGNOSTICO][DFM] Evaluadas: Bull={0} Bear={1} | PassedThreshold={2}", evalBull, evalBear, passed));
+            string bins = string.Join(",", confBins.Select((c,i)=>string.Format("{0}:{1}", i, c)));
+            _logger.Info(string.Format("[DIAGNOSTICO][DFM] ConfidenceBins: {0}", bins));
         }
 
         /// <summary>
@@ -220,9 +269,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 return 0.5;
 
             if (zoneDirection == globalBias)
-                return globalBiasStrength; // 0.5 - 1.0 según la fuerza del bias
+            {
+                // V5.6.2: Cap de seguridad para evitar sobre-dominancia del Bias
+                return Math.Min(1.0, globalBiasStrength * _config.BiasAlignmentBoostFactor);
+            }
 
-            return 0.0; // Contra el bias
+            return 0.0; // Contra el bias (penalización total)
         }
 
         /// <summary>

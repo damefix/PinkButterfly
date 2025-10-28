@@ -35,16 +35,20 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
     {
         public string Id { get; set; }
         public int EntryBar { get; set; }           // Barra donde se generó la señal
+        public DateTime EntryBarTime { get; set; }  // Timestamp de la barra de entrada
         public double Entry { get; set; }
         public double SL { get; set; }
         public double TP { get; set; }
         public string Action { get; set; }          // "BUY" o "SELL"
         public TradeStatus Status { get; set; }
         public int ExecutionBar { get; set; }       // Barra donde se ejecutó (si Status >= EXECUTED)
+        public DateTime ExecutionBarTime { get; set; } // Timestamp de ejecución (V5.7e)
         public int ExitBar { get; set; }            // Barra donde se cerró/canceló
+        public DateTime ExitBarTime { get; set; }   // Timestamp de la barra de salida
         public string ExitReason { get; set; }      // "SL", "TP", "BOS_CONTRARY", "PRICE_DEPARTED", etc.
         public int TFDominante { get; set; }        // TF dominante de la HeatZone
         public string SourceStructureId { get; set; } // ID de la estructura dominante que generó esta orden
+        public double RegistrationPrice { get; set; } // Close cuando se registró la orden (para determinar LIMIT vs STOP)
     }
 
     /// <summary>
@@ -75,7 +79,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// <summary>
         /// Registra una nueva orden Limit
         /// </summary>
-        public void RegisterTrade(string action, double entry, double sl, double tp, int entryBar, int tfDominante, string sourceStructureId)
+        public void RegisterTrade(string action, double entry, double sl, double tp, int entryBar, DateTime entryBarTime, int tfDominante, string sourceStructureId, double currentPrice)
         {
             // FILTRO 1: Verificar cooldown (estructura cancelada recientemente)
             if (!string.IsNullOrEmpty(sourceStructureId) && _cancelledOrdersCooldown.ContainsKey(sourceStructureId))
@@ -109,34 +113,49 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 _logger.Debug($"[TradeManager] ⚠ Orden duplicada rechazada: {action} @ {entry:F2}");
                 return;
             }
+            
+            // FILTRO 3: Verificar límite de operaciones concurrentes (V5.7d)
+            int activeCount = _trades.Count(t => 
+                t.Status == TradeStatus.PENDING || t.Status == TradeStatus.EXECUTED
+            );
+            
+            if (activeCount >= _config.MaxConcurrentTrades)
+            {
+                _logger.Debug($"[TradeManager] ⚠ Orden rechazada por límite de concurrencia: {action} @ {entry:F2} | Activas: {activeCount}/{_config.MaxConcurrentTrades}");
+                return;
+            }
 
             var trade = new TradeRecord
             {
                 Id = Guid.NewGuid().ToString(),
                 EntryBar = entryBar,
+                EntryBarTime = entryBarTime,
                 Entry = entry,
                 SL = sl,
                 TP = tp,
                 Action = action,
                 Status = TradeStatus.PENDING,
                 ExecutionBar = -1,
+                ExecutionBarTime = DateTime.MinValue,
                 ExitBar = -1,
+                ExitBarTime = DateTime.MinValue,
                 ExitReason = null,
                 TFDominante = tfDominante,
-                SourceStructureId = sourceStructureId
+                SourceStructureId = sourceStructureId,
+                RegistrationPrice = currentPrice  // Guardar precio de registro para determinar LIMIT vs STOP
             };
 
             _trades.Add(trade);
             _logger.Info($"[TradeManager] 🎯 ORDEN REGISTRADA: {action} LIMIT @ {entry:F2} | SL={sl:F2}, TP={tp:F2} | Bar={entryBar} | Estructura={sourceStructureId}");
             
             // Log to CSV
-            _tradeLogger?.LogOrderRegistered(action, entry, sl, tp, entryBar, sourceStructureId, _contractSize, _pointValue);
+            _tradeLogger?.LogOrderRegistered(action, entry, sl, tp, entryBar, entryBarTime, sourceStructureId, _contractSize, _pointValue);
         }
 
         /// <summary>
         /// Actualiza el estado de todas las órdenes en la barra actual
         /// </summary>
-        public void UpdateTrades(double currentHigh, double currentLow, int currentBar, double currentPrice, 
+        public void UpdateTrades(double currentHigh, double currentLow, int currentBar, DateTime currentBarTime, double currentPrice, 
                                  CoreEngine coreEngine, IBarDataProvider barData)
         {
             var activeTrades = _trades.Where(t => 
@@ -148,21 +167,42 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 if (trade.Status == TradeStatus.PENDING)
                 {
                     // PASO 1: Verificar caducidad inteligente ANTES de verificar ejecución
-                    if (CheckInvalidation(trade, currentPrice, currentBar, coreEngine, barData))
+                    if (CheckInvalidation(trade, currentPrice, currentBar, currentBarTime, coreEngine, barData))
                         continue; // La orden fue cancelada, pasar a la siguiente
 
-                    // PASO 2: Verificar si el precio llegó al Entry
+                    // PASO 2: Determinar tipo de orden (LIMIT vs STOP) según precio de registro
+                    bool isBuyLimit = (trade.Action == "BUY" && trade.RegistrationPrice > trade.Entry);
+                    bool isSellLimit = (trade.Action == "SELL" && trade.RegistrationPrice < trade.Entry);
+                    
+                    string orderType = trade.Action == "BUY" 
+                        ? (isBuyLimit ? "BUY LIMIT" : "BUY STOP")
+                        : (isSellLimit ? "SELL LIMIT" : "SELL STOP");
+
+                    // PASO 3: Verificar si el precio llegó al Entry según tipo de orden
                     bool entryHit = false;
+
                     if (trade.Action == "BUY")
-                        entryHit = currentLow <= trade.Entry;
+                    {
+                        if (isBuyLimit)
+                            entryHit = currentLow <= trade.Entry;  // BUY LIMIT: precio baja hasta Entry
+                        else
+                            entryHit = currentHigh >= trade.Entry; // BUY STOP: precio sube hasta Entry
+                    }
                     else if (trade.Action == "SELL")
-                        entryHit = currentHigh >= trade.Entry;
+                    {
+                        if (isSellLimit)
+                            entryHit = currentHigh >= trade.Entry; // SELL LIMIT: precio sube hasta Entry
+                        else
+                            entryHit = currentLow <= trade.Entry;  // SELL STOP: precio baja hasta Entry
+                    }
 
                     if (entryHit)
                     {
                         trade.Status = TradeStatus.EXECUTED;
                         trade.ExecutionBar = currentBar;
-                        _logger.Info($"[TradeManager] ✅ ORDEN EJECUTADA: {trade.Action} @ {trade.Entry:F2} en barra {currentBar}");
+                        trade.ExecutionBarTime = currentBarTime; // V5.7e
+                        _logger.Info($"[TradeManager] ✅ ORDEN EJECUTADA: {orderType} @ {trade.Entry:F2} en barra {currentBar}");
+                        _logger.Info($"[DEBUG-EXEC] Trade={trade.Id} ExecutionBar={currentBar} ExecutionBarTime={currentBarTime:yyyy-MM-dd HH:mm:ss} currentHigh={currentHigh:F2} currentLow={currentLow:F2} RegistrationPrice={trade.RegistrationPrice:F2}");
                     }
                 }
                 else if (trade.Status == TradeStatus.EXECUTED)
@@ -186,21 +226,23 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     {
                         trade.Status = TradeStatus.SL_HIT;
                         trade.ExitBar = currentBar;
+                        trade.ExitBarTime = currentBarTime;
                         trade.ExitReason = "SL";
                         _logger.Info($"[TradeManager] 🔴 CERRADA POR SL: {trade.Action} @ {trade.Entry:F2} en barra {currentBar}");
                         
                         // Log to CSV
-                        _tradeLogger?.LogOrderClosedSL(trade.Action, trade.Entry, trade.SL, trade.EntryBar, currentBar, _contractSize, _pointValue);
+                        _tradeLogger?.LogOrderClosedSL(trade.Action, trade.Entry, trade.SL, trade.EntryBar, trade.EntryBarTime, currentBar, currentBarTime, _contractSize, _pointValue);
                     }
                     else if (hitTP)
                     {
                         trade.Status = TradeStatus.TP_HIT;
                         trade.ExitBar = currentBar;
+                        trade.ExitBarTime = currentBarTime;
                         trade.ExitReason = "TP";
                         _logger.Info($"[TradeManager] 🟢 CERRADA POR TP: {trade.Action} @ {trade.Entry:F2} en barra {currentBar}");
                         
                         // Log to CSV
-                        _tradeLogger?.LogOrderClosedTP(trade.Action, trade.Entry, trade.TP, trade.EntryBar, currentBar, _contractSize, _pointValue);
+                        _tradeLogger?.LogOrderClosedTP(trade.Action, trade.Entry, trade.TP, trade.EntryBar, trade.EntryBarTime, currentBar, currentBarTime, _contractSize, _pointValue);
                     }
                 }
             }
@@ -209,7 +251,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// <summary>
         /// Verifica si una orden PENDING debe ser cancelada por invalidación estructural
         /// </summary>
-        private bool CheckInvalidation(TradeRecord trade, double currentPrice, int currentBar, 
+        private bool CheckInvalidation(TradeRecord trade, double currentPrice, int currentBar, DateTime currentBarTime,
                                        CoreEngine coreEngine, IBarDataProvider barData)
         {
             // REGLA 1 (PRIORITARIA): Caducidad por Invalidación Estructural
@@ -220,8 +262,22 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 
                 if (sourceStructure == null || !sourceStructure.IsActive || sourceStructure.Score < _config.MinConfidenceForWait)
                 {
+                    // V5.6.5: Gracia estructural
+                    int grace = _config.StructuralInvalidationGraceBars;
+                    bool priceApproaching = (trade.Action == "BUY" && currentPrice > trade.Entry) ? false
+                                            : (trade.Action == "SELL" && currentPrice < trade.Entry) ? false
+                                            : true;
+
+                    // Si está acercándose al Entry o aún dentro de gracia, NO cancelar
+                    if ((currentBar - trade.EntryBar) < grace || priceApproaching)
+                    {
+                        _logger.Debug($"[TradeManager] ⏳ Gracia estructural activa ({currentBar - trade.EntryBar}/{grace} barras), no se cancela {trade.Action}");
+                        return false;
+                    }
+
                     trade.Status = TradeStatus.CANCELLED;
                     trade.ExitBar = currentBar;
+                    trade.ExitBarTime = currentBarTime;
                     trade.ExitReason = "STRUCTURAL_INVALIDATION";
                     
                     string reason = sourceStructure == null ? "estructura no existe" 
@@ -229,26 +285,23 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                         : $"score decayó a {sourceStructure.Score:F2}";
                     
                     _logger.Warning($"[TradeManager] ❌ ORDEN EXPIRADA (Estructural): {trade.Action} @ {trade.Entry:F2} | Razón: {reason}");
-                    
-                    // Log to CSV
-                    _tradeLogger?.LogOrderExpired(trade.Action, trade.Entry, currentBar, reason);
-                    
-                    // Añadir estructura al cooldown
+                    _tradeLogger?.LogOrderExpired(trade.Action, trade.Entry, currentBar, currentBarTime, reason);
                     AddToCooldown(trade.SourceStructureId, currentBar);
                     return true;
                 }
             }
 
             // REGLA 2: Caducidad por BOS/CHoCH contradictorio
-            if (CheckBOSContradictory(trade, coreEngine))
+            if (CheckBOSContradictory(trade, coreEngine, barData, currentBar))
             {
                 trade.Status = TradeStatus.CANCELLED;
                 trade.ExitBar = currentBar;
+                trade.ExitBarTime = currentBarTime;
                 trade.ExitReason = "BOS_CONTRARY";
                 _logger.Warning($"[TradeManager] ❌ ORDEN CANCELADA por BOS contradictorio: {trade.Action} @ {trade.Entry:F2}");
                 
                 // Log to CSV
-                _tradeLogger?.LogOrderCancelled(trade.Action, trade.Entry, currentBar, "BOS contradictorio");
+                _tradeLogger?.LogOrderCancelled(trade.Action, trade.Entry, currentBar, currentBarTime, "BOS contradictorio");
                 
                 // Añadir estructura al cooldown
                 AddToCooldown(trade.SourceStructureId, currentBar);
@@ -267,11 +320,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             {
                 trade.Status = TradeStatus.CANCELLED;
                 trade.ExitBar = currentBar;
+                trade.ExitBarTime = currentBarTime;
                 trade.ExitReason = "EXPIRED_TIME";
                 _logger.Warning($"[TradeManager] ❌ ORDEN EXPIRADA (Tiempo): {trade.Action} @ {trade.Entry:F2} | Barras esperando: {barsWaiting}");
                 
                 // Log to CSV
-                _tradeLogger?.LogOrderExpired(trade.Action, trade.Entry, currentBar, $"Tiempo: {barsWaiting} barras");
+                _tradeLogger?.LogOrderExpired(trade.Action, trade.Entry, currentBar, currentBarTime, $"Tiempo: {barsWaiting} barras");
                 
                 // Añadir estructura al cooldown
                 AddToCooldown(trade.SourceStructureId, currentBar);
@@ -282,11 +336,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             {
                 trade.Status = TradeStatus.CANCELLED;
                 trade.ExitBar = currentBar;
+                trade.ExitBarTime = currentBarTime;
                 trade.ExitReason = "EXPIRED_DISTANCE";
                 _logger.Warning($"[TradeManager] ❌ ORDEN EXPIRADA (Distancia): {trade.Action} @ {trade.Entry:F2} | Distancia: {distanceToEntry:F2} > {maxAbsoluteDistance:F2}");
                 
                 // Log to CSV
-                _tradeLogger?.LogOrderExpired(trade.Action, trade.Entry, currentBar, $"Distancia: {distanceToEntry:F2} pts");
+                _tradeLogger?.LogOrderExpired(trade.Action, trade.Entry, currentBar, currentBarTime, $"Distancia: {distanceToEntry:F2} pts");
                 
                 // Añadir estructura al cooldown
                 AddToCooldown(trade.SourceStructureId, currentBar);
@@ -322,18 +377,40 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// <summary>
         /// Verifica si hay un BOS/CHoCH contradictorio a la orden
         /// </summary>
-        private bool CheckBOSContradictory(TradeRecord trade, CoreEngine coreEngine)
+        private bool CheckBOSContradictory(TradeRecord trade, CoreEngine coreEngine, IBarDataProvider barData, int currentBar)
         {
-            // CALIBRACIÓN V4: Solo cancelar si el GlobalBias (del ContextManager) CAMBIA de dirección
-            // Esto evita cancelar trades rentables por micro-BOS que son ruido de mercado
-            
-            // Obtener el GlobalBias actual del CoreEngine
+            // V5.6.6: Sesgo único con cálculo directo EMA200@60 para cancelaciones si está habilitado
             string currentBias = coreEngine.CurrentMarketBias;
+            if (_config.UseContextBiasForCancellations)
+            {
+                try
+                {
+                    int tf = 60; // 1H
+                    int index60 = barData.GetCurrentBarIndex(tf);
+                    if (index60 >= 200)
+                    {
+                        double sum = 0.0;
+                        for (int i = 0; i < 200; i++)
+                        {
+                            sum += barData.GetClose(tf, index60 - i);
+                        }
+                        double ema200approx = sum / 200.0; // SMA200 como aproximación para bias
+                        double lastClose = barData.GetClose(tf, index60);
+                        if (lastClose > ema200approx) currentBias = "Bullish";
+                        else if (lastClose < ema200approx) currentBias = "Bearish";
+                        else currentBias = "Neutral";
+
+                        _logger.Info($"[DIAGNOSTICO][CancelBias] TF60 index={index60} Close={lastClose:F2} EMA200~={ema200approx:F2} Bias={currentBias}");
+                    }
+                }
+                catch { /* si falla, mantener currentMarketBias */ }
+            }
             
             // Para BUY LIMIT, cancelar solo si el bias cambió a Bearish
             if (trade.Action == "BUY" && currentBias == "Bearish")
             {
                 _logger.Warning($"[TradeManager] GlobalBias contradictorio: {trade.Action} @ {trade.Entry:F2} | Bias cambió a {currentBias}");
+                _logger.Info($"[DIAGNOSTICO][TM] Cancel_BOS Action={trade.Action} Bias={currentBias}");
                 return true;
             }
 
@@ -341,6 +418,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             if (trade.Action == "SELL" && currentBias == "Bullish")
             {
                 _logger.Warning($"[TradeManager] GlobalBias contradictorio: {trade.Action} @ {trade.Entry:F2} | Bias cambió a {currentBias}");
+                _logger.Info($"[DIAGNOSTICO][TM] Cancel_BOS Action={trade.Action} Bias={currentBias}");
                 return true;
             }
 

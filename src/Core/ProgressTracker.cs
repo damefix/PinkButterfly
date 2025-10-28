@@ -251,8 +251,16 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         private string GenerateProgressBar(int width, bool forceComplete = false)
         {
             double percentage = forceComplete ? 100.0 : ProgressPercentage;
-            int filled = (int)(width * percentage / 100.0);
+            // Clamp porcentaje y longitudes para evitar valores negativos o overflow
+            if (percentage < 0.0) percentage = 0.0;
+            if (percentage > 100.0) percentage = 100.0;
+
+            int filled = (int)Math.Round(width * percentage / 100.0);
+            if (filled < 0) filled = 0;
+            if (filled > width) filled = width;
+
             int empty = width - filled;
+            if (empty < 0) empty = 0;
 
             string bar = new string('█', filled) + new string('░', empty);
             return $"{bar} {percentage:F1}%";

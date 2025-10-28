@@ -28,7 +28,12 @@ using NinjaTrader.NinjaScript;
 using NinjaTrader.Core.FloatingPoint;
 using NinjaTrader.NinjaScript.DrawingTools;
 
-// Nota: LanguageOption ya está definido globalmente, no redefinir aquí
+// Enum para selección de idioma
+public enum LanguageOption
+{
+    English,
+    Spanish
+}
 
 namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 {
@@ -46,6 +51,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         private EngineConfig _config;
         private ILogger _logger;
         private FileLogger _fileLogger;
+        private System.Windows.Media.ImageSource _logoImage;
         private TradeLogger _tradeLogger;
         
         private TradeDecision _lastDecision;
@@ -115,7 +121,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             {
                 Description = @"PinkButterfly ExpertTrader - Indicador de Señales de Trading";
                 Name = "ExpertTrader";
-                Calculate = Calculate.OnBarClose;
+                Calculate = Calculate.OnEachTick;  // Actualizar en cada tick para tiempo real
                 IsOverlay = true;
                 DisplayInDataBox = true;
                 DrawOnPricePanel = true;
@@ -123,7 +129,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 DrawVerticalGridLines = true;
                 PaintPriceMarkers = true;
                 ScaleJustification = NinjaTrader.Gui.Chart.ScaleJustification.Right;
-                IsSuspendedWhileInactive = true;
+                IsSuspendedWhileInactive = false;  // Continuar actualizando en tiempo real
                 
                 // Configurar output a Output Tab 2 (como el resto del sistema)
                 PrintTo = PrintTo.OutputTab2;
@@ -225,9 +231,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     Print("[ExpertTrader] BarDataProvider creado");
 
                     // Inicializar File Loggers
-                    // Ruta: C:\Users\<USUARIO>\Documents\NinjaTrader 8\logs\
+                    // Ruta: C:\Users\<USUARIO>\Documents\NinjaTrader 8\PinkButterfly\logs\
                     string userDataDir = NinjaTrader.Core.Globals.UserDataDir;
-                    string logDirectory = System.IO.Path.Combine(userDataDir, "logs");
+                    string logDirectory = System.IO.Path.Combine(userDataDir, "PinkButterfly", "logs");
                     _fileLogger = new FileLogger(logDirectory, "backtest", _logger, true);
                     _tradeLogger = new TradeLogger(logDirectory, "trades", _logger, true);
                     Print($"[ExpertTrader] Loggers inicializados en: {logDirectory}");
@@ -248,6 +254,25 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
                     // Inicializar variables
                     _lastHeatZones = new List<HeatZone>();
+                    
+                    // Cargar logo
+                    try
+                    {
+                        string logoPath = @"C:\Users\meste\Documents\NinjaTrader 8\PinkButterfly\images\pinkbutterfly.png";
+                        if (System.IO.File.Exists(logoPath))
+                        {
+                            _logoImage = new System.Windows.Media.Imaging.BitmapImage(new Uri(logoPath));
+                            Print($"[ExpertTrader] Logo cargado: {logoPath}");
+                        }
+                        else
+                        {
+                            Print($"[ExpertTrader] ADVERTENCIA: Logo no encontrado en {logoPath}");
+                        }
+                    }
+                    catch (Exception logoEx)
+                    {
+                        Print($"[ExpertTrader] Error cargando logo: {logoEx.Message}");
+                    }
                     
                     // Inicializar tracking de progreso
                     int totalBars = Math.Min(BarsArray[0].Count, _config.BacktestBarsForAnalysis);
@@ -355,12 +380,27 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 // El análisis usa el TF más bajo de TimeframesToUse, no necesariamente el del gráfico
                 if (BarsInProgress == 0 && barIndex >= 20)
                 {
+                    // Asegurar inicialización perezosa si algún componente es nulo (protege contra carreras del ciclo de vida)
+                    EnsureInitializedLazy();
+
                     if (enableLogging)
                         _logger.Debug($"[ExpertTrader] Generando decisión para BarIndex: {barIndex}");
                     
                     // Usar el TF más bajo de TimeframesToUse como referencia para el análisis
                     int lowestTF = _config.TimeframesToUse.Min();
-                    int analysisBarIndex = _barDataProvider.GetCurrentBarIndex(lowestTF);
+                    int analysisBarIndex = _barDataProvider != null ? _barDataProvider.GetCurrentBarIndex(lowestTF) : -1;
+                    
+                    // Null-guards y validaciones
+                    if (_decisionEngine == null || _coreEngine == null || _barDataProvider == null)
+                    {
+                        _logger.Error("[ExpertTrader] Componentes nulos: DecisionEngine/CoreEngine/BarDataProvider. Abortando GenerateDecision.");
+                        return;
+                    }
+                    if (analysisBarIndex < 0)
+                    {
+                        _logger.Error($"[ExpertTrader] analysisBarIndex inválido ({analysisBarIndex}) para TF {lowestTF}m. Abortando GenerateDecision.");
+                        return;
+                    }
                     
                     // Generar decisión con DecisionEngine usando el barIndex del TF de análisis
                     _lastDecision = _decisionEngine.GenerateDecision(_barDataProvider, _coreEngine, analysisBarIndex, AccountSize);
@@ -372,13 +412,17 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                         _logger.Debug($"[ExpertTrader] *** DECISIÓN *** Action={_lastDecision.Action}, Entry={_lastDecision.Entry:F2}, SL={_lastDecision.StopLoss:F2}, TP={_lastDecision.TakeProfit:F2}, Conf={_lastDecision.Confidence:F3}, R:R={rr:F2}");
                     }
 
-                    // TRACKING DE OPERACIÓN ACTIVA
-                    ProcessTradeTracking();
+                    // TRACKING DE OPERACIÓN ACTIVA (V5.7e: usar TF de análisis, no TF del gráfico)
+                    ProcessTradeTracking(lowestTF, analysisBarIndex);
 
                     // Obtener HeatZones del snapshot (para el panel de información)
                     _lastHeatZones = GetTopHeatZones();
-
-                    // Dibujar visualización
+                }
+                
+                // 9. DIBUJAR VISUALIZACIÓN SIEMPRE en el TF principal
+                // Esto asegura actualización constante (en cada tick con Calculate.OnEachTick)
+                if (BarsInProgress == 0)
+                {
                     DrawVisualization();
                 }
             }
@@ -393,15 +437,21 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
         /// <summary>
         /// Procesa el tracking de operaciones usando TradeManager
+        /// V5.7e: Usa el TF y barIndex del análisis, no del gráfico
         /// </summary>
-        private void ProcessTradeTracking()
+        private void ProcessTradeTracking(int analysisTF, int analysisBarIndex)
         {
             if (_lastDecision == null)
                 return;
 
+            // Obtener High/Low/Time del TF de análisis (V5.7e)
+            double currentHigh = _barDataProvider.GetHigh(analysisTF, analysisBarIndex);
+            double currentLow = _barDataProvider.GetLow(analysisTF, analysisBarIndex);
+            double currentPrice = _barDataProvider.GetClose(analysisTF, analysisBarIndex);
+            DateTime currentTime = _barDataProvider.GetBarTime(analysisTF, analysisBarIndex);
+
             // PASO 1: Actualizar estado de todas las órdenes activas
-            double currentPrice = Close[0];
-            _tradeManager.UpdateTrades(High[0], Low[0], CurrentBar, currentPrice, _coreEngine, _barDataProvider);
+            _tradeManager.UpdateTrades(currentHigh, currentLow, analysisBarIndex, currentTime, currentPrice, _coreEngine, _barDataProvider);
 
             // PASO 2: Si llega una NUEVA señal BUY/SELL, registrarla
             bool isNewSignal = (_lastDecision.Action == "BUY" || _lastDecision.Action == "SELL");
@@ -420,11 +470,40 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     _lastDecision.Entry,
                     _lastDecision.StopLoss,
                     _lastDecision.TakeProfit,
-                    CurrentBar,
+                    analysisBarIndex,
+                    currentTime,
                     tfDominante,
-                    sourceStructureId
+                    sourceStructureId,
+                    currentPrice  // Precio de registro para determinar LIMIT vs STOP
                 );
             }
+        }
+
+        /// <summary>
+        /// Convierte un tiempo a BarsAgo en el TF del gráfico (V5.7e)
+        /// </summary>
+        private int GetBarsAgoFromTime(DateTime time)
+        {
+            // DEBUG temporal
+            if (time == DateTime.MinValue)
+            {
+                Print($"[DEBUG] GetBarsAgoFromTime: Recibido DateTime.MinValue");
+                return -1;
+            }
+            
+            // Buscar la barra más cercana al tiempo dado
+            // Time[0] es la barra MÁS RECIENTE, Time[CurrentBar] es la MÁS ANTIGUA
+            for (int i = 0; i < Math.Min(CurrentBar, 5000); i++)
+            {
+                if (Time[i] <= time)
+                {
+                    Print($"[DEBUG] GetBarsAgoFromTime: Buscando {time:yyyy-MM-dd HH:mm} → i={i}, Time[{i}]={Time[i]:yyyy-MM-dd HH:mm}");
+                    return i;
+                }
+            }
+            
+            Print($"[DEBUG] GetBarsAgoFromTime: NO ENCONTRADO {time:yyyy-MM-dd HH:mm}");
+            return -1; // No encontrado
         }
 
         /// <summary>
@@ -452,6 +531,69 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         #endregion
 
         #region Helper Methods
+
+        /// <summary>
+        /// Inicialización perezosa: si algún componente crítico es null, intenta inicializarlo aquí.
+        /// Evita estados nulos por timing entre DataLoaded y primeras llamadas a OnBarUpdate.
+        /// </summary>
+        private void EnsureInitializedLazy()
+        {
+            try
+            {
+                if (_logger == null)
+                {
+                    _logger = new NinjaTraderLogger(this, LogLevel.Info);
+                    Print("[ExpertTrader] LazyInit: Logger inicializado");
+                }
+
+                if (_config == null)
+                {
+                    _config = EngineConfig.LoadDefaults();
+                    _config.EnableFastLoadFromJSON = EnableFastLoad;
+                    Print("[ExpertTrader] LazyInit: Config cargada");
+                }
+
+                if (_barDataProvider == null)
+                {
+                    _barDataProvider = new NinjaTraderBarDataProvider(this);
+                    Print("[ExpertTrader] LazyInit: BarDataProvider creado");
+                }
+
+                if (_fileLogger == null || _tradeLogger == null)
+                {
+                    string userDataDir = NinjaTrader.Core.Globals.UserDataDir;
+                    string logDirectory = System.IO.Path.Combine(userDataDir, "logs");
+                    _fileLogger = _fileLogger ?? new FileLogger(logDirectory, "backtest", _logger, true);
+                    _tradeLogger = _tradeLogger ?? new TradeLogger(logDirectory, "trades", _logger, true);
+                    Print($"[ExpertTrader] LazyInit: Loggers en {logDirectory}");
+                }
+
+                if (_coreEngine == null)
+                {
+                    _coreEngine = new CoreEngine(_barDataProvider, _config, _fileLogger);
+                    _coreEngine.Initialize();
+                    Print("[ExpertTrader] LazyInit: CoreEngine inicializado");
+                }
+
+                if (_decisionEngine == null)
+                {
+                    _decisionEngine = new DecisionEngine(_config, _fileLogger);
+                    Print("[ExpertTrader] LazyInit: DecisionEngine inicializado");
+                }
+
+                if (_tradeManager == null)
+                {
+                    double pointValue = Instrument.MasterInstrument.PointValue;
+                    _tradeManager = new TradeManager(_config, _fileLogger, _tradeLogger, ContractSize, pointValue);
+                    Print("[ExpertTrader] LazyInit: TradeManager inicializado");
+                }
+            }
+            catch (Exception ex)
+            {
+                Print($"[ExpertTrader] LazyInit ERROR: {ex.Message}");
+                Print($"Stack: {ex.StackTrace}");
+            }
+        }
 
         /// <summary>
         /// Obtiene las top HeatZones desde el CoreEngine (para información del panel)
@@ -542,11 +684,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             if (ShowEntryLines)
                 DrawEntryLine();
             
-            if (ShowSLTPLines)
-            {
-                DrawSLLine();
-                DrawTPLine();
-            }
+            // SL/TP ya se dibujan en DrawEntryLine() con las zonas de color
+            // if (ShowSLTPLines)
+            // {
+            //     DrawSLLine();
+            //     DrawTPLine();
+            // }
 
             // 2. Dibujar panel lateral
             if (ShowPanel)
@@ -571,10 +714,30 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     if (trade.Entry <= 0 || trade.ExecutionBar == -1)
                         continue;
                     
-                    int startBarsAgo = CurrentBar - trade.ExecutionBar;
-                    int endBarsAgo = trade.ExitBar > 0 ? CurrentBar - trade.ExitBar : 0;
+                    // V5.7e: Convertir ExecutionBar del TF de análisis al TF del gráfico usando tiempo
+                    int barsAgo1 = GetBarsAgoFromTime(trade.ExecutionBarTime);
+                    int barsAgo2 = trade.ExitBar > 0 ? GetBarsAgoFromTime(trade.ExitBarTime) : 0;
+                    
+                    // Validar que los índices sean válidos
+                    if (barsAgo1 < 0 || (trade.ExitBar > 0 && barsAgo2 < 0))
+                        continue;
+                    
+                    // Asegurar que startBarsAgo sea el MAYOR (más antiguo/izquierda) y endBarsAgo el MENOR (más reciente/derecha)
+                    // para que el rectángulo siempre se dibuje de izquierda a derecha
+                    int startBarsAgo = Math.Max(barsAgo1, barsAgo2);
+                    int endBarsAgo = Math.Min(barsAgo1, barsAgo2);
                     
                     string tag = TAG_ENTRY + trade.Id;
+                    
+                    // Calcular estadísticas del trade
+                    double pointValue = Instrument.MasterInstrument.PointValue;
+                    double tpPoints = Math.Abs(trade.TP - trade.Entry);
+                    double slPoints = Math.Abs(trade.Entry - trade.SL);
+                    double tpDollars = tpPoints * pointValue * ContractSize;
+                    double slDollars = slPoints * pointValue * ContractSize;
+                    
+                    // Calcular R:R de esta operación
+                    double riskReward = slPoints > 0 ? tpPoints / slPoints : 0;
                     
                     // RECTÁNGULO VERDE (TP zone) - Desde Entry hasta TP
                     Brush greenBrush = new SolidColorBrush(Colors.LimeGreen);
@@ -595,6 +758,42 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                         startBarsAgo, trade.Entry,
                         endBarsAgo, trade.SL,
                         Brushes.Transparent, redBrush, 30);
+                    
+                    // Textos sobre TP y SL según dirección de la orden
+                    if (trade.Action == "BUY")
+                    {
+                        // BUY: TP arriba, SL abajo
+                        // Texto sobre TP (encima de zona verde)
+                        string tpText = $"+${tpDollars:F0}\nR:R {riskReward:F1}:1\nTP: {trade.TP:F2}";
+                        Draw.Text(this, tag + "_TP_INFO", false, tpText,
+                            startBarsAgo, trade.TP + (10 * TickSize),
+                            0, Brushes.LimeGreen, new SimpleFont("Arial", 10), 
+                            System.Windows.TextAlignment.Left, Brushes.Transparent, Brushes.Transparent, 0);
+                        
+                        // Texto bajo SL (debajo de zona roja)
+                        string slText = $"SL: {trade.SL:F2}\n-${slDollars:F0}";
+                        Draw.Text(this, tag + "_SL_INFO", false, slText,
+                            startBarsAgo, trade.SL - (15 * TickSize),
+                            0, Brushes.Red, new SimpleFont("Arial", 10), 
+                            System.Windows.TextAlignment.Left, Brushes.Transparent, Brushes.Transparent, 0);
+                    }
+                    else // SELL
+                    {
+                        // SELL: SL arriba, TP abajo
+                        // Texto sobre SL (encima de zona roja)
+                        string slText = $"-${slDollars:F0}\nSL: {trade.SL:F2}";
+                        Draw.Text(this, tag + "_SL_INFO", false, slText,
+                            startBarsAgo, trade.SL + (10 * TickSize),
+                            0, Brushes.Red, new SimpleFont("Arial", 10), 
+                            System.Windows.TextAlignment.Left, Brushes.Transparent, Brushes.Transparent, 0);
+                        
+                        // Texto bajo TP (debajo de zona verde)
+                        string tpText = $"TP: {trade.TP:F2}\nR:R {riskReward:F1}:1\n+${tpDollars:F0}";
+                        Draw.Text(this, tag + "_TP_INFO", false, tpText,
+                            startBarsAgo, trade.TP - (15 * TickSize),
+                            0, Brushes.LimeGreen, new SimpleFont("Arial", 10), 
+                            System.Windows.TextAlignment.Left, Brushes.Transparent, Brushes.Transparent, 0);
+                    }
                     
                     // Línea de Entry (blanca)
                     Draw.Line(this, tag, true, startBarsAgo, trade.Entry, endBarsAgo, trade.Entry, 
@@ -622,44 +821,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     .OrderBy(g => g.Distance)
                     .ToList();
                 
-                if (groupedPending.Count > 0)
-                {
-                    // Construir texto del panel
-                    System.Text.StringBuilder panelText = new System.Text.StringBuilder();
-                    panelText.AppendLine("═══ ÓRDENES PENDIENTES ═══");
-                    panelText.AppendLine($"Última vela: {currentPrice:F2}");
-                    panelText.AppendLine("─────────────────────────");
-                    
-                    foreach (var group in groupedPending)
-                    {
-                        string action = group.Action == "BUY" ? "BUY " : "SELL";
-                        string countStr = group.Count > 1 ? $"({group.Count}x) " : "";
-                        double dist = group.Entry - currentPrice;
-                        string distStr = dist > 0 ? $"+{dist:F2}" : $"{dist:F2}";
-                        
-                        panelText.AppendLine($"{action} {countStr}@ {group.Entry:F2} [{distStr}]");
-                    }
-                    
-                    // REPOSICIONADO: BottomRight para evitar solapamiento con panel principal
-                    Draw.TextFixed(this, "PENDING_ORDERS_PANEL", panelText.ToString(),
-                        TextPosition.BottomRight, 
-                        Brushes.White, 
-                        new SimpleFont("Courier New", 10), 
-                        Brushes.Transparent, 
-                        Brushes.DarkSlateGray, 
-                        100);
-                    
-                    // Dibujar líneas horizontales para cada orden (opcional, para referencia visual)
-                    foreach (var group in groupedPending)
-                    {
-                        string tag = TAG_ENTRY + "PENDING_LINE_" + group.Entry.ToString("F2").Replace(".", "_");
-                        Brush brush = group.Action == "BUY" ? Brushes.LimeGreen : Brushes.Red;
-                        
-                        // Línea horizontal corta en las últimas 5 barras
-                        Draw.Line(this, tag, true, 5, group.Entry, 0, group.Entry, 
-                            brush, DashStyleHelper.Dash, 1);
-                    }
-                }
+                // Panel de órdenes pendientes movido a DrawPanel()
+                // Las líneas de puntos eliminadas para evitar confusión visual
             }
             catch (Exception ex)
             {
@@ -754,79 +917,86 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 double pointValue = Instrument.MasterInstrument.PointValue;
                 
                 // ================================================================
-                // PANEL 1: PRÓXIMA OPERACIÓN
+                // LOGO: Texto estilizado (Draw.Image no está disponible en NT8)
+                // ================================================================
+                var logoPanel = new System.Text.StringBuilder();
+                logoPanel.AppendLine("╔═══════════════════════════╗");
+                logoPanel.AppendLine("║  🦋 PinkButterfly 🦋      ║");
+                logoPanel.AppendLine("║  Smart Trading System     ║");
+                logoPanel.AppendLine("╚═══════════════════════════╝");
+                
+                // ================================================================
+                // PANEL 1: PRÓXIMA OPERACIÓN (con logo arriba)
                 // ================================================================
                 var panel1 = new System.Text.StringBuilder();
-                panel1.AppendLine("PRÓXIMA OPERACIÓN");
-                panel1.AppendLine("─────────────────────────");
+                // Añadir logo al inicio
+                panel1.Append(logoPanel.ToString());
+                panel1.AppendLine("");  // Espacio
+                panel1.AppendLine("═══════════════════════════");
+                panel1.AppendLine("   PRÓXIMA OPERACIÓN");
+                panel1.AppendLine("═══════════════════════════");
                 
                 // Obtener la próxima operación pendiente (la más cercana al precio)
-                var pendingTrades = _tradeManager.GetAllTrades()
+                var nextPendingTrades = _tradeManager.GetAllTrades()
                     .Where(t => t.Status == TradeStatus.PENDING)
                     .OrderBy(t => Math.Abs(t.Entry - Close[0]))
                     .ToList();
                 
-                if (pendingTrades.Count > 0)
+                if (nextPendingTrades.Count > 0)
                 {
-                    var nextTrade = pendingTrades.First();
+                    var nextTrade = nextPendingTrades.First();
                     
                     // Sesgo (Alcista/Neutral/Bajista)
                     string bias = _coreEngine.CurrentMarketBias;
                     string biasES = bias == "Bullish" ? "Alcista" : bias == "Bearish" ? "Bajista" : "Neutral";
-                    panel1.AppendLine($"Sesgo: {biasES}");
+                    panel1.AppendLine($" Sesgo: {biasES}");
                     
-                    // Acción (BUY en verde, SELL en rojo) - usaremos color en el texto completo
+                    // Acción (BUY en verde, SELL en rojo)
                     string action = nextTrade.Action;
-                    panel1.AppendLine($"Acción: {action}");
+                    panel1.AppendLine($" Acción: {action}");
                     
                     // Confianza
                     double confidence = _lastDecision != null ? _lastDecision.Confidence : 0;
-                    panel1.AppendLine($"Confianza: {(confidence * 100):F0}%");
+                    panel1.AppendLine($" Confianza: {(confidence * 100):F0}%");
                     
                     // Entrada
-                    panel1.AppendLine($"Entrada: {nextTrade.Entry:F2}");
+                    panel1.AppendLine($" Entrada: {nextTrade.Entry:F2}");
                     
                     // TP con puntos
                     double tpPoints = Math.Abs(nextTrade.TP - nextTrade.Entry);
-                    panel1.AppendLine($"TP: {nextTrade.TP:F2} - {tpPoints:F2} pts");
+                    panel1.AppendLine($" TP: {nextTrade.TP:F2} - {tpPoints:F2} pts");
                     
                     // SL con puntos
                     double slPoints = Math.Abs(nextTrade.Entry - nextTrade.SL);
-                    panel1.AppendLine($"SL: {nextTrade.SL:F2} - {slPoints:F2} pts");
+                    panel1.AppendLine($" SL: {nextTrade.SL:F2} - {slPoints:F2} pts");
                     
                     // Ganancia en $
                     double ganancia = tpPoints * pointValue * ContractSize;
-                    panel1.AppendLine($"Ganancia: ${ganancia:F2}");
+                    panel1.AppendLine($" Ganancia: ${ganancia:F2}");
                     
                     // Pérdida en $
                     double perdida = slPoints * pointValue * ContractSize;
-                    panel1.AppendLine($"Pérdida: ${perdida:F2}");
+                    panel1.AppendLine($" Pérdida: ${perdida:F2}");
                 }
                 else
                 {
                     // No hay operaciones pendientes
                     string bias = _coreEngine.CurrentMarketBias;
                     string biasES = bias == "Bullish" ? "Alcista" : bias == "Bearish" ? "Bajista" : "Neutral";
-                    panel1.AppendLine($"Sesgo: {biasES}");
-                    panel1.AppendLine();
-                    panel1.AppendLine("No hay señales pendientes");
+                    panel1.AppendLine($" Sesgo: {biasES}");
+                    panel1.AppendLine("");
+                    panel1.AppendLine(" No hay señales pendientes");
                 }
                 
-                // Dibujar Panel 1 en TopRight
-                Draw.TextFixed(this, TAG_PANEL + "TRADE", panel1.ToString(),
-                    TextPosition.TopRight,
-                    Brushes.White,
-                    new Gui.Tools.SimpleFont("Courier New", 10),
-                    Brushes.Transparent,
-                    Brushes.DarkSlateGray,
-                    80);
+                panel1.AppendLine("═══════════════════════════");
                 
                 // ================================================================
-                // PANEL 2: DATOS DE SESIÓN
+                // PANEL 2: DATOS DE SESIÓN (continuar en panel1 para que quede debajo)
                 // ================================================================
-                var panel2 = new System.Text.StringBuilder();
-                panel2.AppendLine("DATOS DE SESIÓN");
-                panel2.AppendLine("─────────────────────────");
+                panel1.AppendLine("");  // Espacio entre paneles
+                panel1.AppendLine("═══════════════════════════");
+                panel1.AppendLine("   DATOS DE SESIÓN");
+                panel1.AppendLine("═══════════════════════════");
                 
                 // Obtener estadísticas del TradeManager
                 var allTrades = _tradeManager.GetAllTrades();
@@ -858,22 +1028,69 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 
                 double resultado = totalBeneficios - totalPerdidas;
                 
-                // Construir texto del panel
-                panel2.AppendLine($"Ejecutadas: {totalExecuted}");
-                panel2.AppendLine($"Pendientes: {pendingCount}");
-                panel2.AppendLine($"Win Rate: {winRate:F0}%");
-                panel2.AppendLine($"Total Beneficio: ${totalBeneficios:F2}");
-                panel2.AppendLine($"Total Pérdidas: ${totalPerdidas:F2}");
-                panel2.AppendLine($"RESULTADO: ${resultado:F2}");
+                // Construir texto del panel (continuar en panel1)
+                panel1.AppendLine($" Ejecutadas: {totalExecuted}");
+                panel1.AppendLine($" Pendientes: {pendingCount}");
+                panel1.AppendLine($" Win Rate: {winRate:F0}%");
+                panel1.AppendLine($" Total Beneficio:");
+                panel1.AppendLine($"   ${totalBeneficios:F2}");
+                panel1.AppendLine($" Total Pérdidas:");
+                panel1.AppendLine($"   ${totalPerdidas:F2}");
+                panel1.AppendLine($" RESULTADO: ${resultado:F2}");
+                panel1.AppendLine("═══════════════════════════");
                 
-                // Dibujar Panel 2 debajo del Panel 1
-                // Nota: NinjaTrader no permite posicionar libremente, usaremos BottomRight
-                Draw.TextFixed(this, TAG_PANEL + "STATS", panel2.ToString(),
-                    TextPosition.TopLeft,
+                // ================================================================
+                // PANEL 3: ÓRDENES PENDIENTES (pegado al final)
+                // ================================================================
+                var allPendingTrades = _tradeManager.GetAllTrades()
+                    .Where(t => t.Status == TradeStatus.PENDING)
+                    .OrderBy(t => Math.Abs(t.Entry - Close[0]))
+                    .ToList();
+                
+                if (allPendingTrades.Count > 0)
+                {
+                    panel1.AppendLine("");  // Espacio
+                    panel1.AppendLine("═══════════════════════════");
+                    panel1.AppendLine("   ÓRDENES PENDIENTES");
+                    panel1.AppendLine("═══════════════════════════");
+                    
+                    double currentPrice = Close[0];
+                    var groupedPending = allPendingTrades
+                        .GroupBy(t => Math.Round(t.Entry, 2))
+                        .Select(g => new { 
+                            Entry = g.Key, 
+                            Count = g.Count(),
+                            Action = g.First().Action,
+                            Distance = Math.Abs(g.Key - currentPrice)
+                        })
+                        .OrderBy(g => g.Distance)
+                        .ToList();
+                    
+                    foreach (var group in groupedPending)
+                    {
+                        string action = group.Action == "BUY" ? "BUY " : "SELL";
+                        string countStr = group.Count > 1 ? $"({group.Count}x) " : "";
+                        double dist = group.Entry - currentPrice;
+                        string distStr = dist > 0 ? $"+{dist:F2}" : $"{dist:F2}";
+                        
+                        panel1.AppendLine($" {action} {countStr}@ {group.Entry:F2} [{distStr}]");
+                    }
+                    
+                    panel1.AppendLine("═══════════════════════════");
+                }
+                
+                // Crear brush rosa para el fondo
+                var pinkBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(255, 105, 180));  // Hot Pink
+                pinkBrush.Opacity = 0.85;
+                pinkBrush.Freeze();
+                
+                // Dibujar Panel combinado en TopRight con fondo rosa
+                Draw.TextFixed(this, TAG_PANEL + "TRADE", panel1.ToString(),
+                    TextPosition.TopRight,
                     Brushes.White,
                     new Gui.Tools.SimpleFont("Courier New", 10),
                     Brushes.Transparent,
-                    Brushes.DarkSlateGray,
+                    pinkBrush,
                     80);
             }
             catch (Exception ex)

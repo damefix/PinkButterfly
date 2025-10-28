@@ -429,9 +429,10 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         
         /// <summary>
         /// Ruta del archivo de estado JSON
-        /// Por defecto: Documents/NinjaTrader 8/PinkButterfly/brain_state.json
+        /// Por defecto: Documents/NinjaTrader 8/PinkButterfly/data/brain_state.json
         /// </summary>
-        public string StateFilePath { get; set; } = "Documents/NinjaTrader 8/PinkButterfly/brain_state.json";
+        public string StateFilePath { get; set; } = System.IO.Path.Combine(
+            NinjaTrader.Core.Globals.UserDataDir, "PinkButterfly", "data", "brain_state.json");
         
         /// <summary>
         /// Habilita el guardado automático del estado
@@ -498,15 +499,43 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// <summary>
         /// Edad máxima en barras para purgar estructuras inactivas
         /// Estructuras más antiguas se purgan si no son relevantes
-        /// OPTIMIZACIÓN: Reducido a 150 (era 500) para purga más agresiva
+        /// V5.7c: Reducido a 80 (era 150) para purga más agresiva
         /// </summary>
-        public int MaxAgeBarsForPurge { get; set; } = 150;
+        public int MaxAgeBarsForPurge { get; set; } = 80;
         
         /// <summary>
         /// Habilita purga agresiva para Liquidity Grabs
         /// Los LG pierden relevancia rápidamente (ya tienen LG_MaxAgeBars)
         /// </summary>
         public bool EnableAggressivePurgeForLG { get; set; } = true;
+        
+        /// <summary>
+        /// Edad máxima en barras para usar estructuras como Stop Loss (por TF)
+        /// V5.7c: Filtro de edad para evitar usar estructuras obsoletas en SL
+        /// Clave: TF en minutos, Valor: edad máxima en barras de ese TF
+        /// </summary>
+        public Dictionary<int, int> MaxAgeForSL_ByTF { get; set; } = new Dictionary<int, int>
+        {
+            { 5, 200 },      // 5m:  200 barras = 16.6 horas ≈ 2 días trading
+            { 15, 100 },     // 15m: 100 barras = 25 horas ≈ 3 días trading
+            { 60, 50 },      // 60m: 50 barras = 50 horas ≈ 6 días trading
+            { 240, 40 },     // 4H:  40 barras = 160 horas ≈ 6.6 días
+            { 1440, 20 }     // 1D:  20 barras = 480 horas ≈ 20 días
+        };
+        
+        /// <summary>
+        /// Edad máxima en barras para usar estructuras como Take Profit (por TF)
+        /// V5.7c: Filtro de edad para evitar usar estructuras obsoletas en TP
+        /// Clave: TF en minutos, Valor: edad máxima en barras de ese TF
+        /// </summary>
+        public Dictionary<int, int> MaxAgeForTP_ByTF { get; set; } = new Dictionary<int, int>
+        {
+            { 5, 200 },      // 5m:  200 barras = 16.6 horas ≈ 2 días trading
+            { 15, 100 },     // 15m: 100 barras = 25 horas ≈ 3 días trading
+            { 60, 50 },      // 60m: 50 barras = 50 horas ≈ 6 días trading
+            { 240, 40 },     // 4H:  40 barras = 160 horas ≈ 6.6 días
+            { 1440, 20 }     // 1D:  20 barras = 480 horas ≈ 20 días
+        };
         
         // ========================================================================
         // CONFIGURACIÓN DE SISTEMA - LÍMITES POR TIPO
@@ -545,13 +574,13 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// ADVERTENCIA: Puede impactar performance en producción
         /// OPTIMIZACIÓN: Desactivado (false) para mejorar velocidad
         /// </summary>
-        public bool EnableDebug { get; set; } = false;
+        public bool EnableDebug { get; set; } = true;
         
         /// <summary>
         /// Activa el desglose detallado de scoring en cada decisión
-        /// OPTIMIZACIÓN: Desactivado (false) para reducir spam de logs y mejorar velocidad
+        /// V5.1: ACTIVADO para auditar señales y diagnóstico
         /// </summary>
-        public bool ShowScoringBreakdown { get; set; } = false;
+        public bool ShowScoringBreakdown { get; set; } = true;
         
         /// <summary>Versión del motor (para compatibilidad de persistencia)</summary>
         public string EngineVersion { get; set; } = "1.0.0";
@@ -589,11 +618,23 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         public int TradeCooldownBars { get; set; } = 25;
         
         /// <summary>
+        /// Número máximo de operaciones concurrentes permitidas (PENDING + EXECUTED)
+        /// V5.7d: Default = 1 (solo una operación activa a la vez)
+        /// Gestión de riesgo institucional: evita multiplicar exposición
+        /// </summary>
+        public int MaxConcurrentTrades { get; set; } = 1;
+        
+        /// <summary>
         /// Solo habilitar logging detallado (DEBUG/INFO) en las últimas N barras del histórico
         /// Reduce significativamente el tiempo de carga y el spam de logs
         /// Ejemplo: 100 = solo loggear las últimas 100 barras del histórico
         /// </summary>
         public int LoggingThresholdBars { get; set; } = 100;
+
+        /// <summary>
+        /// Muestreo de logging forense de Risk: 0 = desactivado; N = loggear 1 de cada N rechazos con detalle (Entry/SL/TP/CurrentPrice)
+        /// </summary>
+        public int RiskDetailSamplingRate { get; set; } = 0;
 
         // ========================================================================
         // DECISION FUSION MODEL (DFM) PARAMETERS
@@ -637,37 +678,37 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// CRÍTICO: La suma de todos los Weight_* debe ser exactamente 1.0
         /// OPTIMIZACIÓN: Aumentado a 0.50 (contribución real: 0.35, factor más importante)
         /// </summary>
-        public double Weight_CoreScore { get; set; } = 0.50;
+        public double Weight_CoreScore { get; set; } = 0.25;
         
         /// <summary>
         /// Peso de la proximidad al precio actual en la decisión final
-        /// OPTIMIZACIÓN: Reducido a 0.10 (contribución real: 0.08, estaba sobreponderado 3x)
+        /// V5.1: Aumentado a 0.30 (dar más peso a estructuras cercanas al precio)
         /// </summary>
-        public double Weight_Proximity { get; set; } = 0.10;
+        public double Weight_Proximity { get; set; } = 0.40;
         
         /// <summary>
         /// Peso de la confluencia de estructuras en la decisión final
         /// OPTIMIZACIÓN: Mantenido en 0.10 (contribución real: 0.05, bien calibrado)
         /// </summary>
-        public double Weight_Confluence { get; set; } = 0.10;
+        public double Weight_Confluence { get; set; } = 0.15;
         
         /// <summary>
         /// Peso del tipo de estructura (OB > FVG, etc.) en la decisión final
-        /// OPTIMIZACIÓN: Mantenido en 0.10 (contribución real: 0.07, razonable)
+        /// V5.1: Desactivado (0.00) para simplificar
         /// </summary>
-        public double Weight_Type { get; set; } = 0.10;
+        public double Weight_Type { get; set; } = 0.00;
         
         /// <summary>
         /// Peso del alineamiento con el bias global en la decisión final
-        /// OPTIMIZACIÓN: Reducido a 0.10 (contribución real: 0.06, estaba sobreponderado 3.3x)
+        /// V5.2: Aumentado a 0.30 (PRIORIDAD MÁXIMA - alineación con tendencia EMA_200)
         /// </summary>
-        public double Weight_Bias { get; set; } = 0.10;
+        public double Weight_Bias { get; set; } = 0.20;
         
         /// <summary>
         /// Peso del momentum (BOS/CHoCH) en la decisión final
-        /// OPTIMIZACIÓN: Activado en 0.10 para aprovechar momentum estructural
+        /// V5.1: Desactivado (0.00) para simplificar
         /// </summary>
-        public double Weight_Momentum { get; set; } = 0.10;
+        public double Weight_Momentum { get; set; } = 0.00;
         
         /// <summary>
         /// Peso del volumen en la decisión final
@@ -724,9 +765,18 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         
         /// <summary>
         /// Confidence mínima para generar señal de BUY/SELL (0.0 - 1.0)
-        /// CALIBRACIÓN: Ajustado a 0.55 para aumentar frecuencia de señales (Test 5000 barras)
+        /// V5.3: Bajado a 0.55 para aumentar frecuencia de operaciones (punto medio entre V5 y V5.2)
         /// </summary>
         public double MinConfidenceForEntry { get; set; } = 0.55;
+        
+        /// <summary>
+        /// Mínimo de confluencia requerida PARA CONSIDERAR ENTRADA (gating duro en DFM).
+        /// Se compara contra el confluenceFactor NORMALIZADO (0..1):
+        /// confluenceFactor = min(1.0, ConfluenceCount / MaxConfluenceReference).
+        /// Ejemplo: 0.30 ≈ al menos ~2 estructuras si MaxConfluenceReference=5 (0.40),
+        /// valor 0.80 requiere 4+ estructuras (V5.7b - Quality Gate muy fuerte).
+        /// </summary>
+        public double MinConfluenceForEntry { get; set; } = 0.80;
         
         /// <summary>
         /// Factor de proximidad máxima para validar Entry estructural
@@ -766,11 +816,69 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         public double ProximityThresholdATR { get; set; } = 5.0;
         
         /// <summary>
+        /// Multiplicador adicional del umbral de proximidad para zonas ALINEADAS con el bias global.
+        /// threshold_eff = ProximityThresholdATR * (1 + BiasProximityMultiplier)
+        /// Solo aplica si zone.Direction == GlobalBias y GlobalBiasStrength > 0.
+        /// </summary>
+        public double BiasProximityMultiplier { get; set; } = 1.0;
+        
+        /// <summary>
         /// Factor de penalización para trades contra el bias global
         /// Si TradeDirection != GlobalBias, Confidence requerida *= (1 / BiasOverrideConfidenceFactor)
         /// Ejemplo: 0.85 = requiere ~18% más de confidence para operar contra tendencia
         /// </summary>
         public double BiasOverrideConfidenceFactor { get; set; } = 0.85;
+        
+        /// <summary>
+        /// Factor de bonificación para zonas alineadas con el bias global (V5.4)
+        /// Multiplica el BiasAlignment cuando la zona está alineada con la tendencia
+        /// Ejemplo: 2.0 = zonas alineadas reciben el doble de BiasContribution
+        /// Esto permite que zonas Bullish lejanas (bajo ProximityScore) generen señales en mercado alcista
+        /// </summary>
+        public double BiasAlignmentBoostFactor { get; set; } = 1.6;
+
+        /// <summary>
+        /// Si true, el TradeManager usará el sesgo del ContextManager (EMA200 1H)
+        /// para cancelaciones, en vez del bias de BOS/CHoCH del CoreEngine.
+        /// Unifica criterio entre entrada y cancelación.
+        /// </summary>
+        public bool UseContextBiasForCancellations { get; set; } = true;
+
+        /// <summary>
+        /// Barras de gracia antes de cancelar por invalidación estructural (estructura no existe,
+        /// inactiva o score decayó). Evita expiraciones prematuras en pullbacks.
+        /// </summary>
+        public int StructuralInvalidationGraceBars { get; set; } = 20;
+
+        /// <summary>
+        /// Si está activo, el DFM aplica gating direccional contra el bias (EMA200 1H por defecto).
+        /// </summary>
+        public bool EnforceDirectionalPolicy { get; set; } = true;
+
+        /// <summary>
+        /// Extra de confianza requerido para operar contra el bias cuando la política direccional está activa.
+        /// </summary>
+        public double CounterBiasMinExtraConfidence { get; set; } = 0.15;
+
+        /// <summary>
+        /// R:R mínimo requerido para operar contra el bias cuando la política direccional está activa.
+        /// </summary>
+        public double CounterBiasMinRR { get; set; } = 2.50;
+
+        /// <summary>
+        /// Fuente del bias para la política direccional (ej: EMA200_60).
+        /// </summary>
+        public string DirectionalPolicyBiasSource { get; set; } = "EMA200_60";
+
+        /// <summary>
+        /// Multiplicador de dirección para Anchors (TF alto) al calcular la dirección de la HeatZone.
+        /// </summary>
+        public double AnchorDirectionWeight { get; set; } = 2.0;
+
+        /// <summary>
+        /// Margen de empate (5% por defecto) para resolver dirección por GlobalBias cuando las fuerzas Bull/Bear son similares.
+        /// </summary>
+        public double DirectionTieMargin { get; set; } = 0.03;
         
         // --------------------------------------------------------------------
         // MARKET CLARITY

@@ -1,22 +1,14 @@
-// ============================================================================
+// ==========================================================================
 // ProximityAnalyzer.cs
 // PinkButterfly CoreBrain - Componente 3 del DFM
-// 
-// Responsabilidades:
-// - Para cada HeatZone, calcular la distancia al precio actual
-// - Calcular el factor de proximidad normalizado (0.0 = lejos, 1.0 = muy cerca)
-// - Ordenar las HeatZones por proximidad (las más cercanas primero)
-// - Filtrar zonas que están demasiado lejos (> ProximityThresholdATR)
-// - Añadir distanceTicks a Metadata para uso posterior
 //
-// Fórmula de Proximidad:
-//   1. Si CurrentPrice está DENTRO de [Low, High]: distance = 0
-//   2. Si CurrentPrice está FUERA: distance = min(|CurrentPrice - High|, |CurrentPrice - Low|)
-//   3. distanceATR = distance / ATR(TF_Dominante)
-//   4. proximityFactor = max(0, 1 - (distanceATR / ProximityThresholdATR))
-//
-// Rango: proximityFactor = 1.0 (dentro de la zona) a 0.0 (muy lejos)
-// ============================================================================
+// V5.6: Proximidad sesgo-consciente
+// - T_eff = ProximityThresholdATR * (1 + BiasProximityMultiplier) si la zona
+//   está alineada con el GlobalBias y GlobalBiasStrength > 0.
+// - Gating: no descartar zonas ALINEADAS aunque ProximityFactor == 0 (permitir
+//   que el DFM aplique BiasContribution). Contra-bias se filtran si
+//   ProximityFactor == 0.
+// ==========================================================================
 
 using System;
 using System.Collections.Generic;
@@ -66,26 +58,45 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
             // Procesar cada HeatZone
             var processedZones = new List<HeatZone>();
+            int keptAligned = 0, filteredAligned = 0, keptCounter = 0, filteredCounter = 0;
+            double sumProxAligned = 0.0, sumProxCounter = 0.0, sumDistATRAligned = 0.0, sumDistATRCounter = 0.0;
 
             foreach (var zone in snapshot.HeatZones)
             {
-                // Calcular distancia y proximidad
-                CalculateProximity(zone, currentPrice, barData, currentBar);
+                // V5.6: determinar alineación con bias
+                bool isAligned = (zone.Direction == snapshot.GlobalBias) && (snapshot.GlobalBiasStrength > 0.0);
+
+                // Calcular distancia y proximidad (sesgo-consciente)
+                CalculateProximityV56(zone, currentPrice, barData, currentBar, isAligned, snapshot.GlobalBiasStrength);
 
                 // Filtrar zonas demasiado lejas
                 double proximityFactor = zone.Metadata.ContainsKey("ProximityFactor")
                     ? (double)zone.Metadata["ProximityFactor"]
                     : 0.0;
 
-                if (proximityFactor > 0.0)
+                // V5.6.1: NO mantener zonas con ProximityFactor == 0, incluso si están alineadas
+            if (proximityFactor > 0.0)
                 {
                     processedZones.Add(zone);
-                    _logger.Debug(string.Format("[ProximityAnalyzer] HeatZone {0}: Proximity={1:F2}, Distance={2:F2} ATR",
-                        zone.Id, proximityFactor, zone.Metadata["DistanceATR"]));
+                    _logger.Debug(string.Format("[ProximityAnalyzer] HeatZone {0}: Proximity={1:F2}, Distance={2:F2} ATR, Aligned={3}",
+                        zone.Id, proximityFactor, zone.Metadata["DistanceATR"], isAligned));
+                    if (isAligned)
+                    {
+                        keptAligned++;
+                        sumProxAligned += proximityFactor;
+                        sumDistATRAligned += (double)zone.Metadata["DistanceATR"];
+                    }
+                    else
+                    {
+                        keptCounter++;
+                        sumProxCounter += proximityFactor;
+                        sumDistATRCounter += (double)zone.Metadata["DistanceATR"];
+                    }
                 }
                 else
                 {
-                    _logger.Debug(string.Format("[ProximityAnalyzer] HeatZone {0} filtrada (demasiado lejos)", zone.Id));
+                    _logger.Debug(string.Format("[ProximityAnalyzer] HeatZone {0} filtrada (demasiado lejos). Aligned={1}", zone.Id, isAligned));
+                    if (isAligned) filteredAligned++; else filteredCounter++;
                 }
             }
 
@@ -94,17 +105,91 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 .OrderByDescending(z => (double)z.Metadata["ProximityFactor"])
                 .ToList();
 
+            // V5.6.4: si existen zonas alineadas con Proximity>0, preferirlas y purgar contra-bias este ciclo
+            bool hasAligned = processedZones.Any(z => z.Metadata.ContainsKey("AlignedWithBias")
+                                                      && (bool)z.Metadata["AlignedWithBias"]
+                                                      && (double)z.Metadata["ProximityFactor"] > 0.0);
+            // Diagnóstico previo a preferencia
+            int preAligned = processedZones.Count(z => z.Metadata.ContainsKey("AlignedWithBias") && (bool)z.Metadata["AlignedWithBias"]);
+            int preCounter = processedZones.Count - preAligned;
+            double preAvgProxAligned = processedZones.Where(z => z.Metadata.ContainsKey("AlignedWithBias") && (bool)z.Metadata["AlignedWithBias"]) 
+                                                     .Select(z => (double)z.Metadata["ProximityFactor"]).DefaultIfEmpty(0).Average();
+            double preAvgDistAligned = processedZones.Where(z => z.Metadata.ContainsKey("AlignedWithBias") && (bool)z.Metadata["AlignedWithBias"]) 
+                                                     .Select(z => (double)z.Metadata["DistanceATR"]).DefaultIfEmpty(0).Average();
+            _logger.Info(string.Format("[DIAGNOSTICO][Proximity] Pre: Aligned={0}/{1} Counter={2}/{3} AvgProxAligned={4:F3} AvgDistATRAligned={5:F2}",
+                preAligned, processedZones.Count, preCounter, processedZones.Count, preAvgProxAligned, preAvgDistAligned));
+
+            if (hasAligned)
+            {
+                int before = processedZones.Count;
+                processedZones = processedZones
+                    .Where(z => z.Metadata.ContainsKey("AlignedWithBias") && (bool)z.Metadata["AlignedWithBias"]) 
+                    .ToList();
+                int after = processedZones.Count;
+                _logger.Info(string.Format("[DIAGNOSTICO][Proximity] PreferAligned: filtradas {0} contra-bias, quedan {1}", before - after, after));
+            }
+
+            // V5.6.7-a: se elimina endurecimiento adicional; PreferAligned ya controla el funnel
+
             snapshot.HeatZones = processedZones;
 
             _logger.Debug(string.Format("[ProximityAnalyzer] Análisis completado: {0}/{1} HeatZones relevantes",
                 processedZones.Count, snapshot.HeatZones.Count));
+
+            // Resumen diagnóstico
+            int totalAligned = keptAligned + filteredAligned;
+            int totalCounter = keptCounter + filteredCounter;
+            double avgProxAligned = keptAligned > 0 ? (sumProxAligned / keptAligned) : 0.0;
+            double avgProxCounter = keptCounter > 0 ? (sumProxCounter / keptCounter) : 0.0;
+            double avgDistATRAligned = keptAligned > 0 ? (sumDistATRAligned / keptAligned) : 0.0;
+            double avgDistATRCounter = keptCounter > 0 ? (sumDistATRCounter / keptCounter) : 0.0;
+
+            _logger.Info("[DIAGNOSTICO][Proximity]" +
+                string.Format(" KeptAligned={0}/{1}, KeptCounter={2}/{3}, AvgProxAligned={4:F3}, AvgProxCounter={5:F3}, AvgDistATRAligned={6:F2}, AvgDistATRCounter={7:F2}",
+                    keptAligned, totalAligned, keptCounter, totalCounter, avgProxAligned, avgProxCounter, avgDistATRAligned, avgDistATRCounter));
+
+            // Resumen de drivers (INFO): medias de BaseProx, ZoneHeightATR, SizePenalty y FinalProx por alineación
+            int aCount = 0, cCount = 0;
+            double aSumBase = 0.0, aSumZoneATR = 0.0, aSumSizePen = 0.0, aSumFinal = 0.0;
+            double cSumBase = 0.0, cSumZoneATR = 0.0, cSumSizePen = 0.0, cSumFinal = 0.0;
+
+            foreach (var z in processedZones)
+            {
+                bool aligned = z.Metadata.ContainsKey("AlignedWithBias") && (bool)z.Metadata["AlignedWithBias"];
+                double baseProx = z.Metadata.ContainsKey("BaseProx") ? (double)z.Metadata["BaseProx"] : 0.0;
+                double zoneATRh = z.Metadata.ContainsKey("ZoneHeightATR") ? (double)z.Metadata["ZoneHeightATR"] : 0.0;
+                double sizePen = z.Metadata.ContainsKey("SizePenalty") ? (double)z.Metadata["SizePenalty"] : 0.0;
+                double finalProx = z.Metadata.ContainsKey("ProximityFactor") ? (double)z.Metadata["ProximityFactor"] : 0.0;
+
+                if (aligned)
+                {
+                    aCount++; aSumBase += baseProx; aSumZoneATR += zoneATRh; aSumSizePen += sizePen; aSumFinal += finalProx;
+                }
+                else
+                {
+                    cCount++; cSumBase += baseProx; cSumZoneATR += zoneATRh; cSumSizePen += sizePen; cSumFinal += finalProx;
+                }
+            }
+
+            double aAvgBase = aCount > 0 ? aSumBase / aCount : 0.0;
+            double aAvgZone = aCount > 0 ? aSumZoneATR / aCount : 0.0;
+            double aAvgSize = aCount > 0 ? aSumSizePen / aCount : 0.0;
+            double aAvgFinal = aCount > 0 ? aSumFinal / aCount : 0.0;
+            double cAvgBase = cCount > 0 ? cSumBase / cCount : 0.0;
+            double cAvgZone = cCount > 0 ? cSumZoneATR / cCount : 0.0;
+            double cAvgSize = cCount > 0 ? cSumSizePen / cCount : 0.0;
+            double cAvgFinal = cCount > 0 ? cSumFinal / cCount : 0.0;
+
+            _logger.Info(string.Format("[DIAGNOSTICO][Proximity] Drivers: Aligned n={0} BaseProx≈ {1:F3} ZoneATR≈ {2:F2} SizePenalty≈ {3:F3} FinalProx≈ {4:F3} | Counter n={5} BaseProx≈ {6:F3} ZoneATR≈ {7:F2} SizePenalty≈ {8:F3} FinalProx≈ {9:F3}",
+                aCount, aAvgBase, aAvgZone, aAvgSize, aAvgFinal,
+                cCount, cAvgBase, cAvgZone, cAvgSize, cAvgFinal));
         }
 
         /// <summary>
-        /// Calcula la distancia y el factor de proximidad para una HeatZone
-        /// Añade los resultados a zone.Metadata
+        /// V5.6: Calcula la distancia y el factor de proximidad aplicando umbral sesgo-consciente
         /// </summary>
-        private void CalculateProximity(HeatZone zone, double currentPrice, IBarDataProvider barData, int currentBar)
+        private void CalculateProximityV56(HeatZone zone, double currentPrice, IBarDataProvider barData, int currentBar,
+                                           bool isAlignedWithBias, double globalBiasStrength)
         {
             // 1. Calcular distancia al ENTRY ESTRUCTURAL (no al borde de la zona)
             // Esto refleja la distancia real a donde se colocará la orden
@@ -143,9 +228,15 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             // 3. Normalizar distancia por ATR
             double distanceATR = distance / atr;
 
-            // 4. Calcular factor de proximidad base (lineal)
-            // proximityFactor = max(0, 1 - (distanceATR / ProximityThresholdATR))
-            double baseProximityFactor = Math.Max(0.0, 1.0 - (distanceATR / _config.ProximityThresholdATR));
+            // 4. Umbral efectivo V5.6 (sesgo-consciente)
+            double thresholdEff = _config.ProximityThresholdATR;
+            if (isAlignedWithBias && globalBiasStrength > 0.0)
+            {
+                thresholdEff *= (1.0 + _config.BiasProximityMultiplier);
+            }
+
+            // 5. Calcular factor de proximidad base (lineal) con threshold efectivo
+            double baseProximityFactor = Math.Max(0.0, 1.0 - (distanceATR / thresholdEff));
             
             // 5. Penalización por tamaño de zona (zonas grandes son menos precisas)
             double zoneHeight = zone.High - zone.Low;
@@ -190,10 +281,15 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             zone.Metadata["Distance"] = distance;
             zone.Metadata["DistanceATR"] = distanceATR;
             zone.Metadata["ProximityFactor"] = proximityFactor;
+            zone.Metadata["BaseProx"] = baseProximityFactor;
+            zone.Metadata["ZoneHeightATR"] = zoneHeightATR;
+            zone.Metadata["SizePenalty"] = sizePenalty;
             zone.Metadata["ProximityScore"] = proximityFactor; // Alias para compatibilidad
             zone.Metadata["DistanceTicks"] = distanceTicks;
             zone.Metadata["IsInside"] = distance == 0.0;
             zone.Metadata["CurrentPrice"] = currentPrice; // Para debugging
+            zone.Metadata["AlignedWithBias"] = isAlignedWithBias;
+            zone.Metadata["ProximityThresholdEff_ATR"] = thresholdEff;
             
             // Logging de depuración
             if (currentPrice == 0.0)
@@ -205,10 +301,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             
             // Logging detallado para depuración
             _logger.Debug(string.Format(
-                "[ProximityAnalyzer] HeatZone {0}: EntryPrice={1:F2}, CurrentPrice={2:F2}, Distance={3:F2}, " +
-                "DistanceATR={4:F2}, BaseProximity={5:F4}, ZoneHeightATR={6:F2}, SizePenalty={7:F4}, FinalProximity={8:F4}",
-                zone.Id, entryPrice, currentPrice, distance, distanceATR, baseProximityFactor, 
-                zoneHeightATR, sizePenalty, proximityFactor));
+                "[ProximityAnalyzer] HeatZone {0}: Entry={1:F2}, Price={2:F2}, Dist={3:F2} ({4:F2} ATR), ThrEff={5:F2} ATR, BaseProx={6:F4}, ZoneATR={7:F2}, SizePenalty={8:F4}, FinalProx={9:F4}, Aligned={10}",
+                zone.Id, entryPrice, currentPrice, distance, distanceATR, thresholdEff, baseProximityFactor,
+                zoneHeightATR, sizePenalty, proximityFactor, isAlignedWithBias));
         }
     }
 }
