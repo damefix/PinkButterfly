@@ -111,6 +111,18 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         [Range(1, 100)]
         public int ContractSize { get; set; }
 
+        [NinjaScriptProperty]
+        [Display(Name = "Enable Output Logging", Description = "Activar logs en Output window de NinjaTrader", Order = 10, GroupName = "Logging")]
+        public bool EnableOutputLogging { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Enable File Logging", Description = "Activar logs en archivo de disco (puede crecer mucho en tiempo real)", Order = 11, GroupName = "Logging")]
+        public bool EnableFileLogging { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Enable Trade CSV", Description = "Activar registro de operaciones en archivo CSV", Order = 12, GroupName = "Logging")]
+        public bool EnableTradeCSV { get; set; }
+
         #endregion
 
         #region NinjaScript Lifecycle
@@ -150,6 +162,11 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 
                 // Risk Management
                 ContractSize = 1; // 1 contrato por defecto
+                
+                // Logging (por defecto TODO ACTIVADO para mantener comportamiento actual)
+                EnableOutputLogging = true;
+                EnableFileLogging = true;
+                EnableTradeCSV = true;
             }
             else if (State == State.Configure)
             {
@@ -204,9 +221,17 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 {
                     Print("[ExpertTrader] State.DataLoaded - Iniciando inicialización");
                     
-                    // Inicializar logger
-                    _logger = new NinjaTraderLogger(this, LogLevel.Info);
-                    Print("[ExpertTrader] Logger inicializado");
+                    // Inicializar logger base (Output window)
+                    if (EnableOutputLogging)
+                    {
+                        _logger = new NinjaTraderLogger(this, LogLevel.Info);
+                        Print("[ExpertTrader] ✅ Output logging ACTIVADO");
+                    }
+                    else
+                    {
+                        _logger = new SilentLogger();
+                        Print("[ExpertTrader] ⚠️ Output logging DESACTIVADO");
+                    }
 
                     // Cargar configuración
                     _config = EngineConfig.LoadDefaults();
@@ -234,9 +259,30 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     // Ruta: C:\Users\<USUARIO>\Documents\NinjaTrader 8\PinkButterfly\logs\
                     string userDataDir = NinjaTrader.Core.Globals.UserDataDir;
                     string logDirectory = System.IO.Path.Combine(userDataDir, "PinkButterfly", "logs");
-                    _fileLogger = new FileLogger(logDirectory, "backtest", _logger, true);
-                    _tradeLogger = new TradeLogger(logDirectory, "trades", _logger, true);
-                    Print($"[ExpertTrader] Loggers inicializados en: {logDirectory}");
+                    
+                    // File Logger (archivo de log)
+                    if (EnableFileLogging)
+                    {
+                        _fileLogger = new FileLogger(logDirectory, "backtest", _logger, true);
+                        Print($"[ExpertTrader] ✅ File logging ACTIVADO: {logDirectory}");
+                    }
+                    else
+                    {
+                        _fileLogger = new FileLogger(logDirectory, "backtest", _logger, false);
+                        Print("[ExpertTrader] ⚠️ File logging DESACTIVADO (no se escribirá a disco)");
+                    }
+                    
+                    // Trade Logger (CSV de operaciones)
+                    if (EnableTradeCSV)
+                    {
+                        _tradeLogger = new TradeLogger(logDirectory, "trades", _logger, true);
+                        Print("[ExpertTrader] ✅ Trade CSV ACTIVADO");
+                    }
+                    else
+                    {
+                        _tradeLogger = new TradeLogger(logDirectory, "trades", _logger, false);
+                        Print("[ExpertTrader] ⚠️ Trade CSV DESACTIVADO (no se registrarán operaciones)");
+                    }
 
                     // Inicializar CoreEngine
                     _coreEngine = new CoreEngine(_barDataProvider, _config, _fileLogger);
@@ -484,10 +530,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// </summary>
         private int GetBarsAgoFromTime(DateTime time)
         {
-            // DEBUG temporal
             if (time == DateTime.MinValue)
             {
-                Print($"[DEBUG] GetBarsAgoFromTime: Recibido DateTime.MinValue");
                 return -1;
             }
             
@@ -497,12 +541,10 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             {
                 if (Time[i] <= time)
                 {
-                    Print($"[DEBUG] GetBarsAgoFromTime: Buscando {time:yyyy-MM-dd HH:mm} → i={i}, Time[{i}]={Time[i]:yyyy-MM-dd HH:mm}");
                     return i;
                 }
             }
             
-            Print($"[DEBUG] GetBarsAgoFromTime: NO ENCONTRADO {time:yyyy-MM-dd HH:mm}");
             return -1; // No encontrado
         }
 
@@ -542,8 +584,16 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             {
                 if (_logger == null)
                 {
-                    _logger = new NinjaTraderLogger(this, LogLevel.Info);
-                    Print("[ExpertTrader] LazyInit: Logger inicializado");
+                    if (EnableOutputLogging)
+                    {
+                        _logger = new NinjaTraderLogger(this, LogLevel.Info);
+                        Print("[ExpertTrader] LazyInit: Output logging ACTIVADO");
+                    }
+                    else
+                    {
+                        _logger = new SilentLogger();
+                        Print("[ExpertTrader] LazyInit: Output logging DESACTIVADO");
+                    }
                 }
 
                 if (_config == null)
@@ -562,10 +612,19 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 if (_fileLogger == null || _tradeLogger == null)
                 {
                     string userDataDir = NinjaTrader.Core.Globals.UserDataDir;
-                    string logDirectory = System.IO.Path.Combine(userDataDir, "logs");
-                    _fileLogger = _fileLogger ?? new FileLogger(logDirectory, "backtest", _logger, true);
-                    _tradeLogger = _tradeLogger ?? new TradeLogger(logDirectory, "trades", _logger, true);
-                    Print($"[ExpertTrader] LazyInit: Loggers en {logDirectory}");
+                    string logDirectory = System.IO.Path.Combine(userDataDir, "PinkButterfly", "logs");
+                    
+                    if (_fileLogger == null)
+                    {
+                        _fileLogger = new FileLogger(logDirectory, "backtest", _logger, EnableFileLogging);
+                        Print($"[ExpertTrader] LazyInit: File logging {(EnableFileLogging ? "ACTIVADO" : "DESACTIVADO")}");
+                    }
+                    
+                    if (_tradeLogger == null)
+                    {
+                        _tradeLogger = new TradeLogger(logDirectory, "trades", _logger, EnableTradeCSV);
+                        Print($"[ExpertTrader] LazyInit: Trade CSV {(EnableTradeCSV ? "ACTIVADO" : "DESACTIVADO")}");
+                    }
                 }
 
                 if (_coreEngine == null)
@@ -932,9 +991,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 // Añadir logo al inicio
                 panel1.Append(logoPanel.ToString());
                 panel1.AppendLine("");  // Espacio
-                panel1.AppendLine("═══════════════════════════");
+                panel1.AppendLine("═════════════════════════════");
                 panel1.AppendLine("   PRÓXIMA OPERACIÓN");
-                panel1.AppendLine("═══════════════════════════");
+                panel1.AppendLine("═════════════════════════════");
                 
                 // Obtener la próxima operación pendiente (la más cercana al precio)
                 var nextPendingTrades = _tradeManager.GetAllTrades()
@@ -949,7 +1008,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     // Sesgo (Alcista/Neutral/Bajista)
                     string bias = _coreEngine.CurrentMarketBias;
                     string biasES = bias == "Bullish" ? "Alcista" : bias == "Bearish" ? "Bajista" : "Neutral";
-                    panel1.AppendLine($" Sesgo: {biasES}");
+                    panel1.AppendLine($" Sentimiento: {biasES}");
                     
                     // Acción (BUY en verde, SELL en rojo)
                     string action = nextTrade.Action;
@@ -983,20 +1042,20 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     // No hay operaciones pendientes
                     string bias = _coreEngine.CurrentMarketBias;
                     string biasES = bias == "Bullish" ? "Alcista" : bias == "Bearish" ? "Bajista" : "Neutral";
-                    panel1.AppendLine($" Sesgo: {biasES}");
+                    panel1.AppendLine($" Sentimiento: {biasES}");
                     panel1.AppendLine("");
                     panel1.AppendLine(" No hay señales pendientes");
                 }
                 
-                panel1.AppendLine("═══════════════════════════");
+                panel1.AppendLine("═════════════════════════════");
                 
                 // ================================================================
                 // PANEL 2: DATOS DE SESIÓN (continuar en panel1 para que quede debajo)
                 // ================================================================
                 panel1.AppendLine("");  // Espacio entre paneles
-                panel1.AppendLine("═══════════════════════════");
+                panel1.AppendLine("═════════════════════════════");
                 panel1.AppendLine("   DATOS DE SESIÓN");
-                panel1.AppendLine("═══════════════════════════");
+                panel1.AppendLine("═════════════════════════════");
                 
                 // Obtener estadísticas del TradeManager
                 var allTrades = _tradeManager.GetAllTrades();
@@ -1037,7 +1096,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 panel1.AppendLine($" Total Pérdidas:");
                 panel1.AppendLine($"   ${totalPerdidas:F2}");
                 panel1.AppendLine($" RESULTADO: ${resultado:F2}");
-                panel1.AppendLine("═══════════════════════════");
+                panel1.AppendLine("═════════════════════════════");
                 
                 // ================================================================
                 // PANEL 3: ÓRDENES PENDIENTES (pegado al final)
@@ -1050,9 +1109,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 if (allPendingTrades.Count > 0)
                 {
                     panel1.AppendLine("");  // Espacio
-                    panel1.AppendLine("═══════════════════════════");
+                    panel1.AppendLine("═════════════════════════════");
                     panel1.AppendLine("   ÓRDENES PENDIENTES");
-                    panel1.AppendLine("═══════════════════════════");
+                    panel1.AppendLine("═════════════════════════════");
                     
                     double currentPrice = Close[0];
                     var groupedPending = allPendingTrades
@@ -1076,7 +1135,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                         panel1.AppendLine($" {action} {countStr}@ {group.Entry:F2} [{distStr}]");
                     }
                     
-                    panel1.AppendLine("═══════════════════════════");
+                    panel1.AppendLine("═════════════════════════════");
                 }
                 
                 // Crear brush rosa para el fondo

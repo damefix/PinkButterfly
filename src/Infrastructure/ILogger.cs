@@ -161,5 +161,20 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             }
         }
     }
+
+    /// <summary>
+    /// Logger silencioso (No-Op) que no escribe nada
+    /// Usado cuando se desactiva el logging para mejorar performance
+    /// </summary>
+    public class SilentLogger : ILogger
+    {
+        public LogLevel MinLevel { get; set; } = LogLevel.Error;
+
+        public void Debug(string message) { }
+        public void Info(string message) { }
+        public void Warning(string message) { }
+        public void Error(string message) { }
+        public void Exception(string message, Exception exception) { }
+    }
 }
 

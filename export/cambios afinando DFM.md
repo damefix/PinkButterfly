@@ -3,6 +3,7 @@
 ## 📋 ÍNDICE RÁPIDO
 
 ### Versiones Principales:
+- **V5.7h** - Interruptor de logging (OFF por defecto) + Snap TickSize SL/TP
 - **V5.7f** - Distinción LIMIT/STOP (Actual) - WR 45.3%, PF 1.19
 - **V5.7g** - Mejora visual paneles informativos
 - **V5.7e** - Fix dibujo de entradas (múltiples iteraciones)
@@ -2940,3 +2941,339 @@ _tradeManager.RegisterTrade(
 
 *Última actualización: 2025-10-28 - V5.7g*
 
+
+## V5.7h — Interruptor de logging y snap a TickSize de SL/TP (28 oct 2025)
+
+### Objetivo
+- Permitir operar en tiempo real sin saturar disco/CPU por logging masivo y asegurar que los precios mostrados/registrados respeten el grid del instrumento (TickSize=0.25 para MES).
+
+### Cambios técnicos
+- `src/Infrastructure/ILogger.cs`
+  - Añadido `SilentLogger` (no-op) que implementa `ILogger` y consume llamadas sin emitir nada.
+- `src/Visual/ExpertTrader.cs`
+  - Nueva propiedad de indicador:
+    - `[NinjaScriptProperty] EnableLogging` (Group: Diagnostics). Por defecto `false`.
+  - Inicialización condicional:
+    - `EnableLogging=true` → `NinjaTraderLogger` + `FileLogger` + `TradeLogger` activos.
+    - `EnableLogging=false` → `SilentLogger` y `TradeLogger` desactivado; `Print` protegido con `PrintIfLogging`.
+  - Se añadieron llamadas `PrintIfLogging(...)` en puntos ruidosos (Configure/DataLoaded/OnBarUpdate/Draw).
+- `src/Decision/RiskCalculator.cs`
+  - Snap final al grid de ticks para valores definitivos de `Entry/SL/TP` (conservador por dirección):
+    - BUY: `entry ceil`, `sl floor`, `tp ceil`.
+    - SELL: `entry floor`, `sl ceil`, `tp floor`.
+  - Elimina decimales inválidos (.20, .70) y evita conceder fills optimistas.
+
+### Impacto
+- Tiempo real: con `EnableLogging=false` no se generan logs a archivo ni spam en Output → menor carga y consumo de disco.
+- Visualización y CSV: `E/SL/TP` en múltiplos exactos de 0.25; coherencia con el instrumento.
+
+### Validación
+- Compilado y probado en gráfico 15m: entradas y cierres en velas correctas, y etiquetas con precios `*.00/*.25/*.50/*.75`.
+- Usuario confirma: “funciona”.
+
+### Configuración recomendada
+- Desarrollo/depuración: `EnableLogging=true`.
+- Operativa en tiempo real/backtest largo: `EnableLogging=false` (por defecto).
+
+### Independencia del TF del gráfico (cambio en `ExpertTrader`)
+- Problema: al cambiar el TF del gráfico, variaban los resultados porque las decisiones se generaban solo cuando `BarsInProgress == 0` (TF del gráfico).
+- Cambio aplicado: en `OnBarUpdate()` las decisiones ahora se generan cuando actualiza el TF de análisis (el más bajo de `TimeframesToUse`), usando:
+  - `if (tfMinutes == lowestTF && barIndex >= 20) { GenerateDecision(...); }`
+  - El dibujo se mantiene en el TF del gráfico: `if (BarsInProgress == 0) { DrawVisualization(); }`
+- Impacto esperado: cambiar el TF del gráfico no debe alterar decisiones ni métricas; solo la frecuencia de repintado visual.
+- Nota: Se monitorizará el histórico por si requiere de‑bounce/sync‑gate para garantizar una y solo una decisión por barra del TF de análisis.
+
+Correcto: el problema es que el indicador solo genera decisiones cuando actualiza la serie del gráfico (BarsInProgress == 0). Al cambiar el TF del gráfico, cambias la frecuencia de “ticks de decisión”, y por eso cambian los resultados, aunque el análisis use el lowestTF.
+
+Arreglo propuesto (quirúrgico en `src/Visual/ExpertTrader.cs`):
+- Sustituir la condición que genera la decisión para que dispare en el TF de análisis (lowestTF), no en el TF del gráfico.
+
+Qué cambiar
+- Busca el bloque en OnBarUpdate con el comentario:
+  - “// 8. Solo en el TF principal (BarsInProgress == 0), generar decisión y dibujar”
+- Reemplaza la condición y deja el dibujo en el TF del gráfico:
+
+Antes:
+```csharp
+// 8. Solo en el TF principal (BarsInProgress == 0), generar decisión y dibujar
+if (BarsInProgress == 0 && barIndex >= 20)
+{
+    ...
+}
+...
+if (BarsInProgress == 0)
+{
+    DrawVisualization();
+}
+```
+
+Después:
+```csharp
+// 8. Generar decisión CUANDO ACTUALIZA el TF de análisis (lowestTF)
+int lowestTF = _config.TimeframesToUse.Min();
+if (tfMinutes == lowestTF && barIndex >= 20)
+{
+    EnsureInitializedLazy();
+    _logger.Debug($"[ExpertTrader] Generando decisión para BarIndex: {barIndex}");
+    int analysisBarIndex = _barDataProvider != null ? _barDataProvider.GetCurrentBarIndex(lowestTF) : -1;
+    if (_decisionEngine == null || _coreEngine == null || _barDataProvider == null) return;
+    if (analysisBarIndex < 0) return;
+    _lastDecision = _decisionEngine.GenerateDecision(_barDataProvider, _coreEngine, analysisBarIndex, AccountSize);
+    if (_lastDecision != null) { ... }
+    ProcessTradeTracking(lowestTF, analysisBarIndex);
+    _lastHeatZones = GetTopHeatZones();
+}
+
+// 9. Dibujar SIEMPRE en el TF del gráfico
+if (BarsInProgress == 0)
+{
+    DrawVisualization();
+}
+```
+[2 tools called]
+
+He aplicado el cambio para que las decisiones se generen cuando actualiza el TF de análisis (lowestTF) y no dependan del TF del gráfico. El dibujo sigue ejecutándose solo en el TF del gráfico.
+
+- Archivo editado: `src/Visual/ExpertTrader.cs`
+  - En `OnBarUpdate()`:
+    - Antes: if (BarsInProgress == 0 && barIndex >= 20) { GenerateDecision... }
+    - Ahora: if (tfMinutes == lowestTF && barIndex >= 20) { GenerateDecision... }
+    - El `DrawVisualization()` se mantiene bajo `BarsInProgress == 0`.
+
+Motivo de por qué estaba así:
+- El indicador había heredado la práctica de “generar y dibujar juntos” en el TF del gráfico por simplicidad; con MTF real, eso introduce dependencia del TF visible. Ya está corregido para mantener la independencia prometida.
+
+Compila en NinjaTrader y confirma que al cambiar el TF del gráfico los resultados no varían.
+
+Esto es lo que se ha cambiado para evitar qeu los datos cambien entre TF en la gráfica, pero ahora hay muchas menos operaciones y el winrate también ha bajado. Hay que revisarlo a fondo.
+
+---
+
+## 📝 **VERSIÓN V5.7i - SISTEMA DE LOGGING CONFIGURABLE**
+
+**Fecha:** 29 Octubre 2025  
+**Objetivo:** Implementar control de logging desde la UI para evitar saturación de disco en tiempo real
+
+### 🎯 **PROBLEMA DETECTADO:**
+
+**Síntoma:**
+- El archivo de log crece infinitamente en tiempo real (cientos de MB)
+- No hay forma de desactivar el logging desde la interfaz
+- El `FileLogger` siempre escribe a disco sin control
+
+**Impacto:**
+- Saturación del disco en sesiones largas
+- Degradación de performance por I/O constante
+- Dificultad para trabajar en tiempo real sin logs
+
+---
+
+### 🛠️ **SOLUCIÓN IMPLEMENTADA:**
+
+#### **1. Nuevo Logger: `SilentLogger`**
+
+**Archivo:** `src/Infrastructure/ILogger.cs`
+
+Implementación de un logger "No-Op" que no escribe nada:
+
+```csharp
+/// <summary>
+/// Logger silencioso (No-Op) que no escribe nada
+/// Usado cuando se desactiva el logging para mejorar performance
+/// </summary>
+public class SilentLogger : ILogger
+{
+    public LogLevel MinLevel { get; set; } = LogLevel.Error;
+
+    public void Debug(string message) { }
+    public void Info(string message) { }
+    public void Warning(string message) { }
+    public void Error(string message) { }
+    public void Exception(string message, Exception exception) { }
+}
+```
+
+**Ventajas:**
+- ✅ Implementa `ILogger` (compatible con todo el sistema)
+- ✅ No escribe nada (0 I/O, 0 overhead)
+- ✅ Puede usarse como drop-in replacement
+
+---
+
+#### **2. Propiedades Configurables en UI**
+
+**Archivo:** `src/Visual/ExpertTrader.cs`
+
+Añadidas 3 propiedades en el grupo "Logging":
+
+```csharp
+[NinjaScriptProperty]
+[Display(Name = "Enable Output Logging", Description = "Activar logs en Output window de NinjaTrader", Order = 10, GroupName = "Logging")]
+public bool EnableOutputLogging { get; set; }
+
+[NinjaScriptProperty]
+[Display(Name = "Enable File Logging", Description = "Activar logs en archivo de disco (puede crecer mucho en tiempo real)", Order = 11, GroupName = "Logging")]
+public bool EnableFileLogging { get; set; }
+
+[NinjaScriptProperty]
+[Display(Name = "Enable Trade CSV", Description = "Activar registro de operaciones en archivo CSV", Order = 12, GroupName = "Logging")]
+public bool EnableTradeCSV { get; set; }
+```
+
+**Valores por defecto (en `State.SetDefaults`):**
+```csharp
+// Logging (por defecto TODO ACTIVADO para mantener comportamiento actual)
+EnableOutputLogging = true;
+EnableFileLogging = true;
+EnableTradeCSV = true;
+```
+
+---
+
+#### **3. Lógica de Inicialización Condicional**
+
+**Archivo:** `src/Visual/ExpertTrader.cs` → `State.DataLoaded`
+
+**Output Logger:**
+```csharp
+// Inicializar logger base (Output window)
+if (EnableOutputLogging)
+{
+    _logger = new NinjaTraderLogger(this, LogLevel.Info);
+    Print("[ExpertTrader] ✅ Output logging ACTIVADO");
+}
+else
+{
+    _logger = new SilentLogger();
+    Print("[ExpertTrader] ⚠️ Output logging DESACTIVADO");
+}
+```
+
+**File Logger:**
+```csharp
+// File Logger (archivo de log)
+if (EnableFileLogging)
+{
+    _fileLogger = new FileLogger(logDirectory, "backtest", _logger, true);
+    Print($"[ExpertTrader] ✅ File logging ACTIVADO: {logDirectory}");
+}
+else
+{
+    _fileLogger = new FileLogger(logDirectory, "backtest", _logger, false);
+    Print("[ExpertTrader] ⚠️ File logging DESACTIVADO (no se escribirá a disco)");
+}
+```
+
+**Trade Logger (CSV):**
+```csharp
+// Trade Logger (CSV de operaciones)
+if (EnableTradeCSV)
+{
+    _tradeLogger = new TradeLogger(logDirectory, "trades", _logger, true);
+    Print("[ExpertTrader] ✅ Trade CSV ACTIVADO");
+}
+else
+{
+    _tradeLogger = new TradeLogger(logDirectory, "trades", _logger, false);
+    Print("[ExpertTrader] ⚠️ Trade CSV DESACTIVADO (no se registrarán operaciones)");
+}
+```
+
+**También actualizado en `EnsureInitializedLazy()`** para mantener consistencia.
+
+---
+
+### ✅ **RESULTADO ESPERADO:**
+
+#### **Configuraciones Posibles:**
+
+| Output | File | CSV | Uso Recomendado |
+|--------|------|-----|-----------------|
+| ✅ | ✅ | ✅ | **Backtest completo** (análisis exhaustivo) |
+| ✅ | ❌ | ✅ | **Tiempo real** (ver logs en Output, guardar operaciones) |
+| ❌ | ❌ | ✅ | **Producción silenciosa** (solo operaciones en CSV) |
+| ❌ | ❌ | ❌ | **Performance máxima** (sin logging, solo trading) |
+| ✅ | ❌ | ❌ | **Debug rápido** (solo Output, sin archivos) |
+
+#### **Ventajas:**
+
+1. **✅ Control Total:** Activar/desactivar cada tipo de logging independientemente
+2. **✅ Sin Saturación:** Desactivar File Logging evita crecimiento infinito del log
+3. **✅ Retrocompatible:** Por defecto todo activado (comportamiento actual)
+4. **✅ Flexible:** Combinaciones libres según necesidad
+5. **✅ Performance:** `SilentLogger` tiene 0 overhead (no hace nada)
+6. **✅ Sin Cambios en Core:** No toca `CoreEngine`, `DecisionEngine`, ni detectores
+
+---
+
+### 📋 **ARCHIVOS MODIFICADOS:**
+
+1. **`src/Infrastructure/ILogger.cs`**
+   - ✅ Añadida clase `SilentLogger` (logger No-Op)
+
+2. **`src/Visual/ExpertTrader.cs`**
+   - ✅ Añadidas 3 propiedades: `EnableOutputLogging`, `EnableFileLogging`, `EnableTradeCSV`
+   - ✅ Valores por defecto en `State.SetDefaults` (todo activado)
+   - ✅ Lógica condicional en `State.DataLoaded` para inicializar loggers
+   - ✅ Lógica condicional en `EnsureInitializedLazy()` para lazy init
+
+---
+
+### 🎯 **USO RECOMENDADO:**
+
+**Para Backtest (análisis completo):**
+```
+✅ Enable Output Logging
+✅ Enable File Logging
+✅ Enable Trade CSV
+```
+
+**Para Tiempo Real (sin saturar disco):**
+```
+✅ Enable Output Logging
+❌ Enable File Logging  ← DESACTIVAR ESTO
+✅ Enable Trade CSV
+```
+
+**Para Producción (máxima performance):**
+```
+❌ Enable Output Logging
+❌ Enable File Logging
+✅ Enable Trade CSV  ← Solo guardar operaciones
+```
+
+---
+
+### 🔄 **PRÓXIMOS PASOS:**
+
+1. **Compilar y probar** con diferentes combinaciones de logging
+2. **Verificar** que al desactivar File Logging no crece el archivo
+3. **Confirmar** que el sistema sigue funcionando correctamente
+4. **Pasar al problema del Multi-TF** (independencia del TF del gráfico)
+
+---
+
+### 📊 **ESTADO ACTUAL:**
+
+- ✅ Sistema de logging configurable implementado
+- ✅ Sin errores de compilación
+- ✅ Eliminados 3 `Print()` de DEBUG en `GetBarsAgoFromTime()` que no respetaban la configuración
+- ⏳ Pendiente: Pruebas en NinjaTrader
+- ⏳ Pendiente: Problema Multi-TF (siguiente tarea)
+
+---
+
+### 🐛 **AJUSTE ADICIONAL: Eliminación de Logs de DEBUG Residuales**
+
+**Problema detectado por el usuario:**
+- Con logging desactivado, seguían apareciendo mensajes `[DEBUG] GetBarsAgoFromTime: Buscando...`
+- Estos mensajes usaban `Print()` directo en lugar del sistema de logging
+
+**Solución:**
+- Eliminadas 3 líneas de `Print()` en el método `GetBarsAgoFromTime()` (líneas 536, 546, 551)
+- Eran logs temporales de debugging que quedaron del desarrollo
+- El método se llama muchas veces por segundo, generando spam en el Output
+
+**Resultado:**
+- ✅ Ahora el logging desactivado es **completamente silencioso**
+- ✅ No más mensajes en Output cuando `EnableOutputLogging = false`
