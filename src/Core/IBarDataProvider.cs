@@ -56,6 +56,16 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// <returns>Índice de la última barra cerrada</returns>
         int GetCurrentBarIndex(int tfMinutes);
 
+        /// <summary>
+        /// Convierte un barIndex de un timeframe origen a otro timeframe destino
+        /// Mapea por tiempo: obtiene el tiempo de la barra origen y busca el índice en el TF destino
+        /// </summary>
+        /// <param name="fromTF">Timeframe origen en minutos</param>
+        /// <param name="toTF">Timeframe destino en minutos</param>
+        /// <param name="barIndexFrom">Índice de la barra en el TF origen</param>
+        /// <returns>Índice correspondiente en el TF destino, o -1 si no existe</returns>
+        int ConvertBarIndex(int fromTF, int toTF, int barIndexFrom);
+
         // ========================================================================
         // PRECIOS OHLC
         // ========================================================================

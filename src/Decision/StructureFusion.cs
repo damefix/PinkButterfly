@@ -263,26 +263,10 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             _logger.Info(string.Format("[DIAGNOSTICO][StructureFusion] HZ={0} Triggers={1} Anchors={2} BullDir={3:F3} BearDir={4:F3} → Dir={5} Reason={6} Bias={7}/{8:F2}",
                 heatZone.Id, allTriggers.Count, anchors.Count, bullDir, bearDir, dirFinal, reason, snapshot.GlobalBias, snapshot.GlobalBiasStrength));
 
-            // 4. Estructura dominante: Seleccionar mejor Trigger por Score × TFWeight (V5.7d)
-            var dominantTrigger = allTriggers
-                .Select(t => new {
-                    Structure = t,
-                    Weight = t.Score * (_config.TFWeights.ContainsKey(t.TF) ? _config.TFWeights[t.TF] : 1.0),
-                    Age = currentBar - t.CreatedAtBarIndex
-                })
-                .OrderByDescending(x => x.Weight)      // Primero: mejor Score × TFWeight
-                .ThenByDescending(x => x.Structure.TF) // Desempate: TF más alto
-                .ThenBy(x => x.Age)                    // Desempate: más fresco
-                .First();
-
-            heatZone.DominantStructureId = dominantTrigger.Structure.Id;
-            heatZone.DominantType = dominantTrigger.Structure.GetType().Name;
-            heatZone.TFDominante = dominantTrigger.Structure.TF;
-            
-            // Logging de trazabilidad
-            _logger.Info(string.Format("[StructureFusion] HZ={0} DominantTrigger: Type={1} TF={2} Score={3:F2} Weight={4:F2} Age={5}",
-                heatZone.Id, dominantTrigger.Structure.GetType().Name, dominantTrigger.Structure.TF, 
-                dominantTrigger.Structure.Score, dominantTrigger.Weight, dominantTrigger.Age));
+            // 4. Estructura dominante: El Trigger principal
+            heatZone.DominantStructureId = triggerMain.Id;
+            heatZone.DominantType = triggerMain.GetType().Name;
+            heatZone.TFDominante = triggerMain.TF;
 
             // 5. Metadata adicional
             heatZone.Metadata = new Dictionary<string, object>

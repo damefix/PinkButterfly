@@ -54,6 +54,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
         public TradeDecision()
         {
+            Id = Guid.NewGuid().ToString(); // CRÍTICO: ID único para tracking
             SourceStructureIds = new List<string>();
             GeneratedAt = DateTime.UtcNow;
         }

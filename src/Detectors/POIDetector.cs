@@ -215,35 +215,20 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         }
 
         /// <summary>
-        /// Snap price to valid tick grid (V5.7e)
-        /// </summary>
-        private double SnapToTick(double price)
-        {
-            double tick = _provider.GetTickSize();
-            return Math.Round(price / tick) * tick;
-        }
-
-        /// <summary>
         /// Crea un nuevo POI a partir de una confluencia de estructuras
         /// </summary>
         private void CreatePOI(List<StructureBase> confluence, int tfMinutes, int barIndex, double atr)
         {
-            // 1) Calcular intersección de todas las estructuras
+            // Calcular rango del POI (intersección de todas las estructuras)
             double poiLow = confluence.Max(s => s.Low);
             double poiHigh = confluence.Min(s => s.High);
 
-            // 2) Si no hay intersección real, usar el rango promedio
+            // Si no hay intersección real, usar el rango promedio
             if (poiLow > poiHigh)
             {
-                double avgLow = confluence.Average(s => s.Low);
-                double avgHigh = confluence.Average(s => s.High);
-                poiLow = avgLow;
-                poiHigh = avgHigh;
+                poiLow = confluence.Average(s => s.Low);
+                poiHigh = confluence.Average(s => s.High);
             }
-
-            // 3) Snap SIEMPRE al grid de ticks (V5.7e: evitar precios inexistentes)
-            poiLow = SnapToTick(poiLow);
-            poiHigh = SnapToTick(poiHigh);
 
             // Crear POI
             var poi = new PointOfInterestInfo
@@ -314,7 +299,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 else
                 {
                     // POI fue purgado, no hacer nada (será removido en la siguiente iteración)
-                    return;
+                    continue;
                 }
 
                 if (_config.EnableDebug)

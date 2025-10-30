@@ -42,13 +42,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         public string Action { get; set; }          // "BUY" o "SELL"
         public TradeStatus Status { get; set; }
         public int ExecutionBar { get; set; }       // Barra donde se ejecutó (si Status >= EXECUTED)
-        public DateTime ExecutionBarTime { get; set; } // Timestamp de ejecución (V5.7e)
+        public DateTime ExecutionBarTime { get; set; }  // Timestamp de la barra de ejecución
         public int ExitBar { get; set; }            // Barra donde se cerró/canceló
         public DateTime ExitBarTime { get; set; }   // Timestamp de la barra de salida
         public string ExitReason { get; set; }      // "SL", "TP", "BOS_CONTRARY", "PRICE_DEPARTED", etc.
         public int TFDominante { get; set; }        // TF dominante de la HeatZone
         public string SourceStructureId { get; set; } // ID de la estructura dominante que generó esta orden
-        public double RegistrationPrice { get; set; } // Close cuando se registró la orden (para determinar LIMIT vs STOP)
     }
 
     /// <summary>
@@ -79,8 +78,19 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// <summary>
         /// Registra una nueva orden Limit
         /// </summary>
-        public void RegisterTrade(string action, double entry, double sl, double tp, int entryBar, DateTime entryBarTime, int tfDominante, string sourceStructureId, double currentPrice)
+        public void RegisterTrade(string action, double entry, double sl, double tp, int entryBar, DateTime entryBarTime, int tfDominante, string sourceStructureId)
         {
+            // FILTRO 0: Verificar límite de operaciones concurrentes
+            if (_config.MaxConcurrentTrades > 0)
+            {
+                int activeTrades = _trades.Count(t => t.Status == TradeStatus.PENDING || t.Status == TradeStatus.EXECUTED);
+                if (activeTrades >= _config.MaxConcurrentTrades)
+                {
+                    _logger.Debug($"[TradeManager] ⛔ Límite de operaciones concurrentes alcanzado ({activeTrades}/{_config.MaxConcurrentTrades}) → orden rechazada");
+                    return;
+                }
+            }
+            
             // FILTRO 1: Verificar cooldown (estructura cancelada recientemente)
             if (!string.IsNullOrEmpty(sourceStructureId) && _cancelledOrdersCooldown.ContainsKey(sourceStructureId))
             {
@@ -99,30 +109,27 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 }
             }
             
-            // FILTRO 2: Verificar si ya existe una orden idéntica activa
-            bool hasIdentical = _trades.Any(t =>
-                (t.Status == TradeStatus.PENDING || t.Status == TradeStatus.EXECUTED) &&
-                t.Action == action &&
-                Math.Abs(t.Entry - entry) < 0.5 &&
-                Math.Abs(t.SL - sl) < 0.5 &&
-                Math.Abs(t.TP - tp) < 0.5
-            );
+            // FILTRO 2: Verificar si ya existe una orden idéntica RECIENTE (margen estricto 0.01 + cooldown)
+            // CRÍTICO: Incluir TODAS las órdenes (incluso cerradas) para evitar re-registrar la misma señal
+            const double tol = 0.01; // Tolerancia muy estricta en ES (<< 1 tick)
+            
+            var lastSimilar = _trades
+                .Where(t =>
+                    t.Action == action &&
+                    Math.Abs(t.Entry - entry) < tol &&
+                    Math.Abs(t.SL - sl) < tol &&
+                    Math.Abs(t.TP - tp) < tol)
+                .OrderByDescending(t => t.EntryBar)
+                .FirstOrDefault();
 
-            if (hasIdentical)
+            if (lastSimilar != null)
             {
-                _logger.Debug($"[TradeManager] ⚠ Orden duplicada rechazada: {action} @ {entry:F2}");
-                return;
-            }
-            
-            // FILTRO 3: Verificar límite de operaciones concurrentes (V5.7d)
-            int activeCount = _trades.Count(t => 
-                t.Status == TradeStatus.PENDING || t.Status == TradeStatus.EXECUTED
-            );
-            
-            if (activeCount >= _config.MaxConcurrentTrades)
-            {
-                _logger.Debug($"[TradeManager] ⚠ Orden rechazada por límite de concurrencia: {action} @ {entry:F2} | Activas: {activeCount}/{_config.MaxConcurrentTrades}");
-                return;
+                int minBars = _config.MinBarsBetweenSameSignal; // p.ej. 12
+                if (entryBar - lastSimilar.EntryBar < minBars)
+                {
+                    _logger.Debug($"[TradeManager] Señal duplicada en ventana ({entryBar - lastSimilar.EntryBar}/{minBars}) | Status={lastSimilar.Status} → ignorada");
+                    return;
+                }
             }
 
             var trade = new TradeRecord
@@ -136,13 +143,11 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 Action = action,
                 Status = TradeStatus.PENDING,
                 ExecutionBar = -1,
-                ExecutionBarTime = DateTime.MinValue,
                 ExitBar = -1,
                 ExitBarTime = DateTime.MinValue,
                 ExitReason = null,
                 TFDominante = tfDominante,
-                SourceStructureId = sourceStructureId,
-                RegistrationPrice = currentPrice  // Guardar precio de registro para determinar LIMIT vs STOP
+                SourceStructureId = sourceStructureId
             };
 
             _trades.Add(trade);
@@ -170,39 +175,19 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     if (CheckInvalidation(trade, currentPrice, currentBar, currentBarTime, coreEngine, barData))
                         continue; // La orden fue cancelada, pasar a la siguiente
 
-                    // PASO 2: Determinar tipo de orden (LIMIT vs STOP) según precio de registro
-                    bool isBuyLimit = (trade.Action == "BUY" && trade.RegistrationPrice > trade.Entry);
-                    bool isSellLimit = (trade.Action == "SELL" && trade.RegistrationPrice < trade.Entry);
-                    
-                    string orderType = trade.Action == "BUY" 
-                        ? (isBuyLimit ? "BUY LIMIT" : "BUY STOP")
-                        : (isSellLimit ? "SELL LIMIT" : "SELL STOP");
-
-                    // PASO 3: Verificar si el precio llegó al Entry según tipo de orden
+                    // PASO 2: Verificar si el precio llegó al Entry
                     bool entryHit = false;
-
                     if (trade.Action == "BUY")
-                    {
-                        if (isBuyLimit)
-                            entryHit = currentLow <= trade.Entry;  // BUY LIMIT: precio baja hasta Entry
-                        else
-                            entryHit = currentHigh >= trade.Entry; // BUY STOP: precio sube hasta Entry
-                    }
+                        entryHit = currentLow <= trade.Entry;
                     else if (trade.Action == "SELL")
-                    {
-                        if (isSellLimit)
-                            entryHit = currentHigh >= trade.Entry; // SELL LIMIT: precio sube hasta Entry
-                        else
-                            entryHit = currentLow <= trade.Entry;  // SELL STOP: precio baja hasta Entry
-                    }
+                        entryHit = currentHigh >= trade.Entry;
 
                     if (entryHit)
                     {
                         trade.Status = TradeStatus.EXECUTED;
                         trade.ExecutionBar = currentBar;
-                        trade.ExecutionBarTime = currentBarTime; // V5.7e
-                        _logger.Info($"[TradeManager] ✅ ORDEN EJECUTADA: {orderType} @ {trade.Entry:F2} en barra {currentBar}");
-                        _logger.Info($"[DEBUG-EXEC] Trade={trade.Id} ExecutionBar={currentBar} ExecutionBarTime={currentBarTime:yyyy-MM-dd HH:mm:ss} currentHigh={currentHigh:F2} currentLow={currentLow:F2} RegistrationPrice={trade.RegistrationPrice:F2}");
+                        trade.ExecutionBarTime = currentBarTime;
+                        _logger.Info($"[TradeManager] ✅ ORDEN EJECUTADA: {trade.Action} @ {trade.Entry:F2} en barra {currentBar}");
                     }
                 }
                 else if (trade.Status == TradeStatus.EXECUTED)

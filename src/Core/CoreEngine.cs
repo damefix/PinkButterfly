@@ -578,7 +578,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             {
                 if (!_structuresById.ContainsKey(structure.Id))
                 {
-                    _logger.Warning($"UpdateStructure: estructura {structure.Id} no existe - use AddStructure()");
+                    // Convertido a Debug: esto puede ocurrir en Multi-TF y no es crítico
+                    if (_config.EnableDebug)
+                        _logger.Debug($"UpdateStructure: estructura {structure.Id} no existe en este TF - ignorada");
                     return;
                 }
 

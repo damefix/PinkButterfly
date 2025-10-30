@@ -102,6 +102,19 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         }
 
         /// <summary>
+        /// Convierte un barIndex de un timeframe origen a un timeframe destino
+        /// Mapea por tiempo: obtiene el tiempo de la barra origen y busca el índice correspondiente en el TF destino
+        /// </summary>
+        public int ConvertBarIndex(int fromTF, int toTF, int barIndexFrom)
+        {
+            // Obtener el tiempo de la barra en el TF origen
+            DateTime barTime = GetBarTime(fromTF, barIndexFrom);
+            
+            // Buscar el índice correspondiente en el TF destino
+            return GetBarIndexFromTime(toTF, barTime);
+        }
+
+        /// <summary>
         /// Obtiene el precio de apertura de una barra
         /// </summary>
         public double GetOpen(int tfMinutes, int barIndex)
@@ -233,6 +246,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// <summary>
         /// Calcula el ATR (Average True Range) para un timeframe y periodo
         /// Usa caché para evitar recalcular en cada llamada
+        /// CRÍTICO Multi-TF: Usa el tfMinutes especificado, NO siempre BIP=0
         /// </summary>
         public double GetATR(int tfMinutes, int period, int barIndex)
         {
@@ -246,8 +260,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                         return _atrCache[cacheKey];
                 }
 
-                // Calcular ATR manualmente
-                double atr = CalculateATR(period, barIndex);
+                // CRÍTICO Multi-TF: Calcular ATR en el TF especificado
+                double atr = CalculateATR(tfMinutes, period, barIndex);
 
                 lock (_lock)
                 {
@@ -303,8 +317,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
         /// <summary>
         /// Calcula el ATR manualmente usando True Range
+        /// CRÍTICO Multi-TF: Usa el tfMinutes especificado para obtener High/Low/Close correctos
         /// </summary>
-        private double CalculateATR(int period, int barIndex)
+        private double CalculateATR(int tfMinutes, int period, int barIndex)
         {
             try
             {
@@ -322,9 +337,10 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     if (prevIndex < 0)
                         break;
 
-                    double high = GetHigh(0, currentIndex);
-                    double low = GetLow(0, currentIndex);
-                    double prevClose = GetClose(0, prevIndex);
+                    // CRÍTICO Multi-TF: Usar el tfMinutes especificado, NO BIP=0
+                    double high = GetHigh(tfMinutes, currentIndex);
+                    double low = GetLow(tfMinutes, currentIndex);
+                    double prevClose = GetClose(tfMinutes, prevIndex);
 
                     // True Range = max(high-low, abs(high-prevClose), abs(low-prevClose))
                     double tr1 = high - low;

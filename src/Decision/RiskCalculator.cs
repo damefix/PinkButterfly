@@ -45,7 +45,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             _logger.Debug("[RiskCalculator] Inicializado con lógica estructural inteligente");
         }
 
-        public void Process(DecisionSnapshot snapshot, IBarDataProvider barData, CoreEngine coreEngine, int currentBar, double accountSize)
+        public void Process(DecisionSnapshot snapshot, IBarDataProvider barData, CoreEngine coreEngine, int currentBar, int analysisTF, double accountSize)
         {
             if (snapshot == null)
                 throw new ArgumentNullException(nameof(snapshot));
@@ -145,6 +145,11 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// </summary>
         private void CalculateStructuralRiskLevels(HeatZone zone, IBarDataProvider barData, CoreEngine coreEngine, int currentBar, double accountSize)
         {
+            // CRÍTICO Multi-TF: Obtener el tiempo de análisis e índice del TFDominante
+            // Esto garantiza que todas las estructuras usen el mismo marco temporal
+            DateTime analysisTime = barData.GetBarTime(zone.TFDominante, currentBar);
+            int idxDom = currentBar; // Ya es el índice correcto del TFDominante
+            
             // Obtener ATR del TF Dominante
             double atr = barData.GetATR(zone.TFDominante, currentBar, 14);
             if (atr <= 0)
@@ -211,7 +216,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 }
                 
                 // SL ESTRUCTURAL: Buscar Swing Low protector
-                stopLoss = CalculateStructuralSL_Buy(zone, coreEngine, barData, currentBar, atr);
+                stopLoss = CalculateStructuralSL_Buy(zone, coreEngine, barData, currentBar, atr, idxDom);
                 if (zone.Metadata.ContainsKey("RejectLowTFTightSL") && (bool)zone.Metadata["RejectLowTFTightSL"])
                 {
                     _logger.Info(string.Format("[DIAGNOSTICO][Risk] REJECT BUY: AllLowTFBelow10 (zona {0})", zone.Id));
@@ -221,7 +226,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 }
                 
                 // TP JERÁRQUICO: Buscar objetivo estructural
-                takeProfit = CalculateStructuralTP_Buy(zone, coreEngine, barData, currentBar, entry, stopLoss);
+                takeProfit = CalculateStructuralTP_Buy(zone, coreEngine, barData, currentBar, entry, stopLoss, analysisTime);
             }
             else if (zone.Direction == "Bearish")
             {
@@ -255,7 +260,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 }
                 
                 // SL ESTRUCTURAL: Buscar Swing High protector
-                stopLoss = CalculateStructuralSL_Sell(zone, coreEngine, barData, currentBar, atr);
+                stopLoss = CalculateStructuralSL_Sell(zone, coreEngine, barData, currentBar, atr, idxDom);
                 if (zone.Metadata.ContainsKey("RejectLowTFTightSL") && (bool)zone.Metadata["RejectLowTFTightSL"])
                 {
                     _logger.Info(string.Format("[DIAGNOSTICO][Risk] REJECT SELL: AllLowTFBelow10 (zona {0})", zone.Id));
@@ -265,7 +270,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 }
                 
                 // TP JERÁRQUICO: Buscar objetivo estructural
-                takeProfit = CalculateStructuralTP_Sell(zone, coreEngine, barData, currentBar, entry, stopLoss);
+                takeProfit = CalculateStructuralTP_Sell(zone, coreEngine, barData, currentBar, entry, stopLoss, analysisTime);
             }
             else
             {
@@ -449,13 +454,16 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// Calcula SL estructural para BUY: Swing Low protector - (ATR * buffer)
         /// Mínimo: Entry - (3.0 * ATR) [AUMENTADO PARA OPERABILIDAD]
         /// </summary>
-        private double CalculateStructuralSL_Buy(HeatZone zone, CoreEngine coreEngine, IBarDataProvider barData, int currentBar, double atr)
+        private double CalculateStructuralSL_Buy(HeatZone zone, CoreEngine coreEngine, IBarDataProvider barData, int currentBar, double atr, int idxDom)
         {
             double entry = zone.Low;
             double minSL = entry - (3.0 * atr); // SL mínimo de seguridad (AUMENTADO de 1.5 a 3.0)
 
+            // CRÍTICO Multi-TF: Obtener el tiempo de análisis e índice del TFDominante
+            DateTime analysisTime = barData.GetBarTime(zone.TFDominante, idxDom);
+
             // Buscar Swing Low protector (debajo de la zona)
-            var swingLowPick = FindProtectiveSwingLowBanded(zone, coreEngine, barData, atr, entry, true);
+            var swingLowPick = FindProtectiveSwingLowBanded(zone, coreEngine, barData, atr, entry, true, analysisTime);
             var swingLow = swingLowPick != null ? swingLowPick.Item1 : null;
             int swingTf = swingLowPick != null ? swingLowPick.Item2 : -1;
 
@@ -495,13 +503,16 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// Calcula SL estructural para SELL: Swing High protector + (ATR * buffer)
         /// Mínimo: Entry + (3.0 * ATR) [AUMENTADO PARA OPERABILIDAD]
         /// </summary>
-        private double CalculateStructuralSL_Sell(HeatZone zone, CoreEngine coreEngine, IBarDataProvider barData, int currentBar, double atr)
+        private double CalculateStructuralSL_Sell(HeatZone zone, CoreEngine coreEngine, IBarDataProvider barData, int currentBar, double atr, int idxDom)
         {
             double entry = zone.High;
             double minSL = entry + (3.0 * atr); // SL mínimo de seguridad (AUMENTADO de 1.5 a 3.0)
 
+            // CRÍTICO Multi-TF: Obtener el tiempo de análisis e índice del TFDominante
+            DateTime analysisTime = barData.GetBarTime(zone.TFDominante, idxDom);
+
             // Buscar Swing High protector (encima de la zona)
-            var swingHighPick = FindProtectiveSwingHighBanded(zone, coreEngine, barData, atr, entry, true);
+            var swingHighPick = FindProtectiveSwingHighBanded(zone, coreEngine, barData, atr, entry, true, analysisTime);
             var swingHigh = swingHighPick != null ? swingHighPick.Item1 : null;
             int swingTf = swingHighPick != null ? swingHighPick.Item2 : -1;
 
@@ -547,7 +558,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// 3. Swing High opuesto
         /// 4. Fallback: Entry + (Entry - SL) * MinRiskRewardRatio
         /// </summary>
-        private double CalculateStructuralTP_Buy(HeatZone zone, CoreEngine coreEngine, IBarDataProvider barData, int currentBar, double entry, double stopLoss)
+        private double CalculateStructuralTP_Buy(HeatZone zone, CoreEngine coreEngine, IBarDataProvider barData, int currentBar, double entry, double stopLoss, DateTime analysisTime)
         {
             double riskDistance = entry - stopLoss;
             double fallbackTP = entry + (riskDistance * _config.MinRiskRewardRatio);
@@ -571,8 +582,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     double tpPrice = liq.Low;
                     double distATR = Math.Abs(tpPrice - entry) / atr;
                     double potentialRR = (tpPrice - entry) / riskDistance;
-                    int currentBarInStructureTF = barData.GetCurrentBarIndex(liq.TF);
-                    int age = currentBarInStructureTF - liq.CreatedAtBarIndex;
+                    
+                    // CRÍTICO Multi-TF: Calcular edad usando el tiempo de análisis, no el índice más reciente
+                    int idxInStructureTF = barData.GetBarIndexFromTime(liq.TF, analysisTime);
+                    if (idxInStructureTF < 0) continue; // Descartar si no se puede mapear
+                    int age = idxInStructureTF - liq.CreatedAtBarIndex;
+                    
                     allCandidates.Add(Tuple.Create("P1", liq.Type, liq.Score, liq.TF, tpPrice, distATR, age));
                 }
             }
@@ -588,8 +603,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     double tpPrice = str.Low;
                     double distATR = Math.Abs(tpPrice - entry) / atr;
                     double potentialRR = (tpPrice - entry) / riskDistance;
-                    int currentBarInStructureTF = barData.GetCurrentBarIndex(str.TF);
-                    int age = currentBarInStructureTF - str.CreatedAtBarIndex;
+                    
+                    // CRÍTICO Multi-TF: Calcular edad usando el tiempo de análisis, no el índice más reciente
+                    int idxInStructureTF = barData.GetBarIndexFromTime(str.TF, analysisTime);
+                    if (idxInStructureTF < 0) continue; // Descartar si no se puede mapear
+                    int age = idxInStructureTF - str.CreatedAtBarIndex;
+                    
                     allCandidates.Add(Tuple.Create("P2", str.Type, str.Score, str.TF, tpPrice, distATR, age));
                 }
             }
@@ -605,8 +624,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     double tpPrice = sw.High;
                     double distATR = Math.Abs(tpPrice - entry) / atr;
                     double potentialRR = (tpPrice - entry) / riskDistance;
-                    int currentBarInStructureTF = barData.GetCurrentBarIndex(sw.TF);
-                    int age = currentBarInStructureTF - sw.CreatedAtBarIndex;
+                    
+                    // CRÍTICO Multi-TF: Calcular edad usando el tiempo de análisis, no el índice más reciente
+                    int idxInStructureTF = barData.GetBarIndexFromTime(sw.TF, analysisTime);
+                    if (idxInStructureTF < 0) continue; // Descartar si no se puede mapear
+                    int age = idxInStructureTF - sw.CreatedAtBarIndex;
+                    
                     allCandidates.Add(Tuple.Create("P3", "Swing", sw.Score, sw.TF, tpPrice, distATR, age));
                 }
             }
@@ -751,7 +774,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// 3. Swing Low opuesto
         /// 4. Fallback: Entry - (SL - Entry) * MinRiskRewardRatio
         /// </summary>
-        private double CalculateStructuralTP_Sell(HeatZone zone, CoreEngine coreEngine, IBarDataProvider barData, int currentBar, double entry, double stopLoss)
+        private double CalculateStructuralTP_Sell(HeatZone zone, CoreEngine coreEngine, IBarDataProvider barData, int currentBar, double entry, double stopLoss, DateTime analysisTime)
         {
             double riskDistance = stopLoss - entry;
             double fallbackTP = entry - (riskDistance * _config.MinRiskRewardRatio);
@@ -774,8 +797,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 {
                     double tpPrice = liq.High;
                     double distATR = Math.Abs(entry - tpPrice) / atr;
-                    int currentBarInStructureTF = barData.GetCurrentBarIndex(liq.TF);
-                    int age = currentBarInStructureTF - liq.CreatedAtBarIndex;
+                    
+                    // CRÍTICO Multi-TF: Calcular edad usando el tiempo de análisis, no el índice más reciente
+                    int idxInStructureTF = barData.GetBarIndexFromTime(liq.TF, analysisTime);
+                    if (idxInStructureTF < 0) continue; // Descartar si no se puede mapear
+                    int age = idxInStructureTF - liq.CreatedAtBarIndex;
+                    
                     allCandidates.Add(Tuple.Create("P1", liq.Type, liq.Score, liq.TF, tpPrice, distATR, age));
                 }
             }
@@ -790,8 +817,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 {
                     double tpPrice = str.High;
                     double distATR = Math.Abs(entry - tpPrice) / atr;
-                    int currentBarInStructureTF = barData.GetCurrentBarIndex(str.TF);
-                    int age = currentBarInStructureTF - str.CreatedAtBarIndex;
+                    
+                    // CRÍTICO Multi-TF: Calcular edad usando el tiempo de análisis, no el índice más reciente
+                    int idxInStructureTF = barData.GetBarIndexFromTime(str.TF, analysisTime);
+                    if (idxInStructureTF < 0) continue; // Descartar si no se puede mapear
+                    int age = idxInStructureTF - str.CreatedAtBarIndex;
+                    
                     allCandidates.Add(Tuple.Create("P2", str.Type, str.Score, str.TF, tpPrice, distATR, age));
                 }
             }
@@ -806,8 +837,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 {
                     double tpPrice = sw.Low;
                     double distATR = Math.Abs(entry - tpPrice) / atr;
-                    int currentBarInStructureTF = barData.GetCurrentBarIndex(sw.TF);
-                    int age = currentBarInStructureTF - sw.CreatedAtBarIndex;
+                    
+                    // CRÍTICO Multi-TF: Calcular edad usando el tiempo de análisis, no el índice más reciente
+                    int idxInStructureTF = barData.GetBarIndexFromTime(sw.TF, analysisTime);
+                    if (idxInStructureTF < 0) continue; // Descartar si no se puede mapear
+                    int age = idxInStructureTF - sw.CreatedAtBarIndex;
+                    
                     allCandidates.Add(Tuple.Create("P3", "Swing", sw.Score, sw.TF, tpPrice, distATR, age));
                 }
             }
@@ -953,7 +988,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// Busca el Swing Low más cercano DEBAJO de la HeatZone (protector para BUY)
         /// Busca en TFs altos (4H, 1D) para mayor robustez
         /// </summary>
-        private Tuple<SwingInfo,int> FindProtectiveSwingLowBanded(HeatZone zone, CoreEngine coreEngine, IBarDataProvider barData, double atr, double entry, bool prioritizeTf)
+        private Tuple<SwingInfo,int> FindProtectiveSwingLowBanded(HeatZone zone, CoreEngine coreEngine, IBarDataProvider barData, double atr, double entry, bool prioritizeTf, DateTime analysisTime)
         {
             // Priorizar TFs >= 60 si existen
             IEnumerable<int> tfs = prioritizeTf
@@ -968,9 +1003,10 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 {
                     if (s.IsActive && !s.IsHigh && s.Low < zone.Low)
                     {
-                        // V5.7c: FILTRO DE EDAD - Rechazar estructuras obsoletas
-                        int currentBarInStructureTF = barData.GetCurrentBarIndex(s.TF);
-                        int age = currentBarInStructureTF - s.CreatedAtBarIndex;
+                        // CRÍTICO Multi-TF: Calcular edad usando el tiempo de análisis, no el índice más reciente
+                        int idxInTf = barData.GetBarIndexFromTime(s.TF, analysisTime);
+                        if (idxInTf < 0) continue; // Descartar si no se puede mapear
+                        int age = idxInTf - s.CreatedAtBarIndex;
                         int maxAge = _config.MaxAgeForSL_ByTF.ContainsKey(s.TF) ? _config.MaxAgeForSL_ByTF[s.TF] : 100;
                         
                         if (age > maxAge)
@@ -1003,9 +1039,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             foreach (var c in candidates.OrderBy(x => x.Item3))
             {
                 idx++;
-                // CRÍTICO: Calcular edad en barras del TF de la estructura, no del gráfico
-                int currentBarInStructureTF = barData.GetCurrentBarIndex(c.Item2);
-                int age = currentBarInStructureTF - c.Item1.CreatedAtBarIndex;
+                // CRÍTICO Multi-TF: Calcular edad usando el tiempo de análisis
+                int idxInTf = barData.GetBarIndexFromTime(c.Item2, analysisTime);
+                int age = (idxInTf >= 0) ? (idxInTf - c.Item1.CreatedAtBarIndex) : -1;
                 bool isInBand = (c.Item3 >= 10.0 && c.Item3 <= 15.0);
                 _logger.Info(string.Format(
                     "[DIAGNOSTICO][Risk] SL_CANDIDATE: Idx={0} Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} InBand={6}",
@@ -1020,8 +1056,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             if (inBand.Count > 0)
             {
                 var best = inBand.First();
-                int currentBarInStructureTF = barData.GetCurrentBarIndex(best.Item2);
-                int ageSelected = currentBarInStructureTF - best.Item1.CreatedAtBarIndex;
+                int idxInTf = barData.GetBarIndexFromTime(best.Item2, analysisTime);
+                int ageSelected = (idxInTf >= 0) ? (idxInTf - best.Item1.CreatedAtBarIndex) : -1;
                 _logger.Info(string.Format("[DIAGNOSTICO][Risk] SLPick BUY: Zone={0} SwingTF={1} SLDistATR={2:F2} Target={3:F1} Banda=[{4:F0},{5:F0}]",
                     zone.Id, best.Item2, best.Item3, target, bandMin, bandMax));
                 _logger.Info(string.Format("[DIAGNOSTICO][Risk] SL_SELECTED: Zone={0} Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} Reason=InBand[{6:F0},{7:F0}]",
@@ -1032,8 +1068,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             var belowMax = candidates.Where(c => c.Item3 < bandMax).OrderByDescending(c => c.Item3).FirstOrDefault();
             if (belowMax != null)
             {
-                int currentBarInStructureTF = barData.GetCurrentBarIndex(belowMax.Item2);
-                int ageSelected = currentBarInStructureTF - belowMax.Item1.CreatedAtBarIndex;
+                int idxInTf = barData.GetBarIndexFromTime(belowMax.Item2, analysisTime);
+                int ageSelected = (idxInTf >= 0) ? (idxInTf - belowMax.Item1.CreatedAtBarIndex) : -1;
                 _logger.Info(string.Format("[DIAGNOSTICO][Risk] SLPick BUY Fallback<15: Zone={0} SwingTF={1} SLDistATR={2:F2}", zone.Id, belowMax.Item2, belowMax.Item3));
                 _logger.Info(string.Format("[DIAGNOSTICO][Risk] SL_SELECTED: Zone={0} Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} Reason=Fallback<15",
                     zone.Id, belowMax.Item1.Score, belowMax.Item2, belowMax.Item3, ageSelected, belowMax.Item1.Low));
@@ -1047,7 +1083,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// Busca el Swing High más cercano ENCIMA de la HeatZone (protector para SELL)
         /// Busca en TFs altos (4H, 1D) para mayor robustez
         /// </summary>
-        private Tuple<SwingInfo,int> FindProtectiveSwingHighBanded(HeatZone zone, CoreEngine coreEngine, IBarDataProvider barData, double atr, double entry, bool prioritizeTf)
+        private Tuple<SwingInfo,int> FindProtectiveSwingHighBanded(HeatZone zone, CoreEngine coreEngine, IBarDataProvider barData, double atr, double entry, bool prioritizeTf, DateTime analysisTime)
         {
             IEnumerable<int> tfs = prioritizeTf
                 ? _config.TimeframesToUse.OrderBy(tf => tf < 60 ? 1 : 0).ThenBy(tf => tf)
@@ -1061,9 +1097,10 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 {
                     if (s.IsActive && s.IsHigh && s.High > zone.High)
                     {
-                        // V5.7c: FILTRO DE EDAD - Rechazar estructuras obsoletas
-                        int currentBarInStructureTF = barData.GetCurrentBarIndex(s.TF);
-                        int age = currentBarInStructureTF - s.CreatedAtBarIndex;
+                        // CRÍTICO Multi-TF: Calcular edad usando el tiempo de análisis, no el índice más reciente
+                        int idxInTf = barData.GetBarIndexFromTime(s.TF, analysisTime);
+                        if (idxInTf < 0) continue; // Descartar si no se puede mapear
+                        int age = idxInTf - s.CreatedAtBarIndex;
                         int maxAge = _config.MaxAgeForSL_ByTF.ContainsKey(s.TF) ? _config.MaxAgeForSL_ByTF[s.TF] : 100;
                         
                         if (age > maxAge)
@@ -1096,9 +1133,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             foreach (var c in candidates.OrderBy(x => x.Item3))
             {
                 idx++;
-                // CRÍTICO: Calcular edad en barras del TF de la estructura, no del gráfico
-                int currentBarInStructureTF = barData.GetCurrentBarIndex(c.Item2);
-                int age = currentBarInStructureTF - c.Item1.CreatedAtBarIndex;
+                // CRÍTICO Multi-TF: Calcular edad usando el tiempo de análisis
+                int idxInTf = barData.GetBarIndexFromTime(c.Item2, analysisTime);
+                int age = (idxInTf >= 0) ? (idxInTf - c.Item1.CreatedAtBarIndex) : -1;
                 bool isInBand = (c.Item3 >= 10.0 && c.Item3 <= 15.0);
                 _logger.Info(string.Format(
                     "[DIAGNOSTICO][Risk] SL_CANDIDATE: Idx={0} Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} InBand={6}",
@@ -1113,9 +1150,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             if (inBand.Count > 0)
             {
                 var best = inBand.First();
-                // CRÍTICO: Calcular edad en barras del TF de la estructura, no del gráfico
-                int currentBarInStructureTF = barData.GetCurrentBarIndex(best.Item2);
-                int ageSelected = currentBarInStructureTF - best.Item1.CreatedAtBarIndex;
+                int idxInTf = barData.GetBarIndexFromTime(best.Item2, analysisTime);
+                int ageSelected = (idxInTf >= 0) ? (idxInTf - best.Item1.CreatedAtBarIndex) : -1;
                 _logger.Info(string.Format("[DIAGNOSTICO][Risk] SLPick SELL: Zone={0} SwingTF={1} SLDistATR={2:F2} Target={3:F1} Banda=[{4:F0},{5:F0}]",
                     zone.Id, best.Item2, best.Item3, target, bandMin, bandMax));
                 _logger.Info(string.Format("[DIAGNOSTICO][Risk] SL_SELECTED: Zone={0} Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} Reason=InBand[{6:F0},{7:F0}]",
@@ -1125,9 +1161,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             var belowMax = candidates.Where(c => c.Item3 < bandMax).OrderByDescending(c => c.Item3).FirstOrDefault();
             if (belowMax != null)
             {
-                // CRÍTICO: Calcular edad en barras del TF de la estructura, no del gráfico
-                int currentBarInStructureTF = barData.GetCurrentBarIndex(belowMax.Item2);
-                int ageSelected = currentBarInStructureTF - belowMax.Item1.CreatedAtBarIndex;
+                int idxInTf = barData.GetBarIndexFromTime(belowMax.Item2, analysisTime);
+                int ageSelected = (idxInTf >= 0) ? (idxInTf - belowMax.Item1.CreatedAtBarIndex) : -1;
                 _logger.Info(string.Format("[DIAGNOSTICO][Risk] SLPick SELL Fallback<15: Zone={0} SwingTF={1} SLDistATR={2:F2}", zone.Id, belowMax.Item2, belowMax.Item3));
                 _logger.Info(string.Format("[DIAGNOSTICO][Risk] SL_SELECTED: Zone={0} Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} Reason=Fallback<15",
                     zone.Id, belowMax.Item1.Score, belowMax.Item2, belowMax.Item3, ageSelected, belowMax.Item1.High));
