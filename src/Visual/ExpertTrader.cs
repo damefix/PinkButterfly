@@ -67,6 +67,13 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         private const string TAG_SL = "SL_";
         private const string TAG_TP = "TP_";
         private const string TAG_PANEL = "PANEL_";
+        
+        // Contadores para estadísticas de SyncGate
+        private int _totalBarsProcessed = 0;
+        private int _barsOmittedBySyncGate = 0;
+        
+        // Tracking de última barra procesada por TF (evita llamadas duplicadas a OnBarClose)
+        private Dictionary<int, int> _lastProcessedBarByTF = new Dictionary<int, int>();
 
         #endregion
 
@@ -107,20 +114,25 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         public bool EnableFastLoad { get; set; }
 
         [NinjaScriptProperty]
-        [Display(Name = "Contratos por Operación", Description = "Número de contratos a operar (para cálculo de P&L)", Order = 8, GroupName = "Risk Management")]
+        [Display(Name = "Días de Backtest", Description = "Número de días históricos a analizar (10 días = tests rápidos ~5-8 min, 52 días = completo ~25-30 min)", Order = 8, GroupName = "Performance")]
+        [Range(5, 200)]
+        public int BacktestDays { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Contratos por Operación", Description = "Número de contratos a operar (para cálculo de P&L)", Order = 9, GroupName = "Risk Management")]
         [Range(1, 100)]
         public int ContractSize { get; set; }
 
         [NinjaScriptProperty]
-        [Display(Name = "Enable Output Logging", Description = "Activar logs en Output window de NinjaTrader", Order = 10, GroupName = "Logging")]
+        [Display(Name = "Enable Output Logging", Description = "Activar logs en Output window de NinjaTrader", Order = 11, GroupName = "Logging")]
         public bool EnableOutputLogging { get; set; }
 
         [NinjaScriptProperty]
-        [Display(Name = "Enable File Logging", Description = "Activar logs en archivo de disco (puede crecer mucho en tiempo real)", Order = 11, GroupName = "Logging")]
+        [Display(Name = "Enable File Logging", Description = "Activar logs en archivo de disco (puede crecer mucho en tiempo real)", Order = 12, GroupName = "Logging")]
         public bool EnableFileLogging { get; set; }
 
         [NinjaScriptProperty]
-        [Display(Name = "Enable Trade CSV", Description = "Activar registro de operaciones en archivo CSV", Order = 12, GroupName = "Logging")]
+        [Display(Name = "Enable Trade CSV", Description = "Activar registro de operaciones en archivo CSV", Order = 13, GroupName = "Logging")]
         public bool EnableTradeCSV { get; set; }
 
         #endregion
@@ -159,6 +171,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 
                 // Performance
                 EnableFastLoad = false; // Por defecto desactivado (primera ejecución debe generar el JSON)
+                BacktestDays = 10; // Por defecto 10 días (~3000 barras en TF 5m) para tests rápidos
                 
                 // Risk Management
                 ContractSize = 1; // 1 contrato por defecto
@@ -239,6 +252,13 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     // Aplicar Fast Load desde la UI
                     _config.EnableFastLoadFromJSON = EnableFastLoad;
                     
+                    // Convertir días a barras según el TF más bajo
+                    int lowestTF = _config.TimeframesToUse.Min();
+                    int barsPorDia = 1440 / lowestTF; // 1440 minutos en un día
+                    _config.BacktestBarsForAnalysis = BacktestDays * barsPorDia;
+                    
+                    Print($"[ExpertTrader] Backtest configurado: {BacktestDays} días = {_config.BacktestBarsForAnalysis} barras (TF base: {lowestTF}m, {barsPorDia} barras/día)");
+                    
                     if (EnableFastLoad)
                     {
                         Print("═══════════════════════════════════════════════════════");
@@ -254,6 +274,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     // Crear provider
                     _barDataProvider = new NinjaTraderBarDataProvider(this);
                     Print("[ExpertTrader] BarDataProvider creado");
+                    
+                    // DIAGNÓSTICO: Mostrar rangos temporales de cada TF
+                    LogTFRanges();
 
                     // Inicializar File Loggers
                     // Ruta: C:\Users\<USUARIO>\Documents\NinjaTrader 8\PinkButterfly\logs\
@@ -325,6 +348,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     _coreEngine.StartProgressTracking(totalBars);
                     Print($"[ExpertTrader] ProgressTracker inicializado para {totalBars} barras");
                     
+                    // Diagnóstico de rangos temporales
+                    LogTFRanges();
+                    
                     Print("[ExpertTrader] State.DataLoaded completado exitosamente");
                 }
                 catch (Exception ex)
@@ -335,6 +361,33 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             }
             else if (State == State.Terminated)
             {
+                // Imprimir estadísticas de SyncGate
+                int totalBars = _totalBarsProcessed + _barsOmittedBySyncGate;
+                if (totalBars > 0)
+                {
+                    double omittedPct = (_barsOmittedBySyncGate * 100.0) / totalBars;
+                    double processedPct = (_totalBarsProcessed * 100.0) / totalBars;
+                    
+                    Print("╔════════════════════════════════════════════════════════════════╗");
+                    Print("║           📊 ESTADÍSTICAS DE SYNCGATE (MULTI-TF)             ║");
+                    Print("╠════════════════════════════════════════════════════════════════╣");
+                    Print($"║ 📈 Barras intentadas:    {totalBars,6}                             ║");
+                    Print($"║ ✅ Barras procesadas:    {_totalBarsProcessed,6}  ({processedPct,5:F1}%)                   ║");
+                    Print($"║ ⚠️  Barras omitidas:     {_barsOmittedBySyncGate,6}  ({omittedPct,5:F1}%)                   ║");
+                    Print("╚════════════════════════════════════════════════════════════════╝");
+                    
+                    // También al log
+                    if (_fileLogger != null)
+                    {
+                        _fileLogger.Info("========================================");
+                        _fileLogger.Info("[ESTADISTICAS SYNCGATE]");
+                        _fileLogger.Info($"Barras intentadas:  {totalBars}");
+                        _fileLogger.Info($"Barras procesadas:  {_totalBarsProcessed} ({processedPct:F1}%)");
+                        _fileLogger.Info($"Barras omitidas:    {_barsOmittedBySyncGate} ({omittedPct:F1}%)");
+                        _fileLogger.Info("========================================");
+                    }
+                }
+                
                 // Cleanup
                 if (_coreEngine != null)
                 {
@@ -379,62 +432,129 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     return;
                 
                 // 5. Control de carga histórica: solo procesar las últimas N barras
-                int totalBars = BarsArray[barsInProgressIndex].Count;
-                int barsToSkip = totalBars - _config.BacktestBarsForAnalysis;
+                // CORRECCIÓN Multi-TF: Usar el lowestTF para el cálculo, no el TF del gráfico
+                int lowestTF = _config.TimeframesToUse.Min();
+                int lowestTFIndex = Array.FindIndex(BarsArray, b => b != null && (int)b.BarsPeriod.Value == lowestTF);
                 
-                if (State == State.Historical && barIndex < barsToSkip)
+                if (lowestTFIndex >= 0 && State == State.Historical)
                 {
-                    // Saltar barras antiguas en histórico para acelerar la carga
-                    return;
+                    int totalBarsLowestTF = BarsArray[lowestTFIndex].Count;
+                    int barsToSkip = totalBarsLowestTF - _config.BacktestBarsForAnalysis;
+                    
+                    // CRÍTICO: Obtener el barIndex del lowestTF correspondiente al TIEMPO de esta barra
+                    // NO usar GetCurrentBarIndex (que devuelve el más reciente), sino mapear por tiempo
+                    DateTime currentTime = Time[0]; // Tiempo de la barra actual que disparó OnBarUpdate
+                    int lowestBarIndex = _barDataProvider.GetBarIndexFromTime(lowestTF, currentTime);
+                    
+                    if (lowestBarIndex >= 0 && lowestBarIndex < barsToSkip)
+                    {
+                        // Saltar barras antiguas en histórico para acelerar la carga
+                        if (lowestBarIndex == barsToSkip - 1 && _fileLogger != null)
+                        {
+                            _fileLogger.Info($"[ExpertTrader] ⏭️ Saltadas {barsToSkip} barras históricas del lowestTF ({lowestTF}m). Iniciando procesamiento desde barra {lowestBarIndex}/{totalBarsLowestTF}");
+                        }
+                        return;
+                    }
                 }
                 
                 // 6. Control de logging: solo loggear las últimas N barras del histórico
+                int currentTFTotalBars = BarsArray[barsInProgressIndex].Count;
                 bool enableLogging = (State == State.Realtime) || 
-                                    (barIndex >= totalBars - _config.LoggingThresholdBars);
+                                    (barIndex >= currentTFTotalBars - _config.LoggingThresholdBars);
                 
-                if (barIndex == barsToSkip && State == State.Historical)
+                // Log de inicio de procesamiento (solo una vez al llegar al umbral)
+                if (lowestTFIndex >= 0 && State == State.Historical)
                 {
-                    Print($"[ExpertTrader] Iniciando procesamiento histórico desde barra {barIndex}/{totalBars} (TF {tfMinutes}m)");
+                    int totalBarsLowestTF = BarsArray[lowestTFIndex].Count;
+                    int barsToSkip = totalBarsLowestTF - _config.BacktestBarsForAnalysis;
+                    int lowestBarIndex = _barDataProvider.GetCurrentBarIndex(lowestTF);
+                    
+                    if (lowestBarIndex == barsToSkip)
+                    {
+                        Print($"[ExpertTrader] Iniciando procesamiento histórico desde barra {lowestBarIndex}/{totalBarsLowestTF} del lowestTF ({lowestTF}m)");
+                    }
                 }
                 
-                // 7. CRÍTICO: Solo llamar a CoreEngine.OnBarClose si el TF está en TimeframesToUse
-                // Esto protege la integridad del scoring y análisis MTF
-                // NOTA: En modo Fast Load, OnBarClose() está bloqueado internamente (modo estático)
+                // 7. CRÍTICO Multi-TF: Actualizar el TF que disparó OnBarUpdate
+                // IMPORTANTE: Aplicar tracking TAMBIÉN aquí para evitar procesamiento duplicado
                 if (_config.TimeframesToUse.Contains(tfMinutes))
                 {
-                    _coreEngine.OnBarClose(tfMinutes, barIndex);
-                    
-                    if (enableLogging)
-                        _logger.Debug($"[ExpertTrader] OnBarClose({tfMinutes}m, bar {barIndex}) - BarsInProgress: {barsInProgressIndex}");
-                }
-                else if (barsInProgressIndex == 0)
-                {
-                    // Este es el TF del gráfico, pero NO está en TimeframesToUse
-                    // Solo usarlo para dibujar, NO para análisis
-                    if (enableLogging)
-                        _logger.Debug($"[ExpertTrader] TF {tfMinutes}m (gráfico) - Solo dibujo, no análisis");
+                    // Solo procesar si es una barra nueva para este TF
+                    if (!_lastProcessedBarByTF.ContainsKey(tfMinutes) || _lastProcessedBarByTF[tfMinutes] < barIndex)
+                    {
+                        _coreEngine.OnBarClose(tfMinutes, barIndex);
+                        _lastProcessedBarByTF[tfMinutes] = barIndex; // Actualizar tracking
+                        
+                        // Debug reducido: solo cada 1000 barras
+                        if (enableLogging && _fileLogger != null && barIndex % 1000 == 0)
+                            _fileLogger.Debug($"[ExpertTrader] OnBarClose({tfMinutes}m, bar {barIndex}) - BIP: {barsInProgressIndex}");
+                    }
+                    else if (enableLogging && _fileLogger != null && barIndex % 1000 == 0)
+                    {
+                        _fileLogger.Debug($"[ExpertTrader] OnBarClose({tfMinutes}m, bar {barIndex}) OMITIDA (ya procesada)");
+                    }
                 }
                 
                 // FAST LOAD: Actualizar scores dinámicamente incluso en modo estático
-                // Los scores de proximidad deben recalcularse en cada barra
                 if (_config.EnableFastLoadFromJSON && _config.TimeframesToUse.Contains(tfMinutes))
                 {
                     _coreEngine.UpdateScoresForFastLoad(tfMinutes, barIndex);
                 }
 
-                // 8. Solo en el TF principal (BarsInProgress == 0), generar decisión y dibujar
-                // El análisis usa el TF más bajo de TimeframesToUse, no necesariamente el del gráfico
-                if (BarsInProgress == 0 && barIndex >= 20)
+                // 8. SOLUCIÓN MULTI-TF: Cuando el TF más bajo se actualiza, actualizar TODOS los TFs
+                // Esto garantiza que todas las estructuras (15m, 60m, 240m, 1440m) estén sincronizadas
+                // (lowestTF ya está definido en línea 423)
+                bool isLowestTF = tfMinutes == lowestTF;
+                
+                if (isLowestTF)
+                {
+                    // Obtener el chartTime del lowestTF (referencia temporal)
+                    DateTime chartTime = _barDataProvider.GetBarTime(lowestTF, barIndex);
+                    
+                    // TRAZA TEMPORAL: Verificar que el sync se ejecuta (REDUCIDO: solo cada 1000 barras)
+                    if (_fileLogger != null && barIndex % 1000 == 0)
+                    {
+                        _fileLogger.Info($"[ExpertTrader] 🔄 SYNC Multi-TF: lowestTF={lowestTF}m, barIndex={barIndex}, chartTime={chartTime:yyyy-MM-dd HH:mm}");
+                    }
+                    
+                    // Actualizar TODOS los demás TFs con sus índices correspondientes al chartTime
+                    foreach (int tf in _config.TimeframesToUse)
+                    {
+                        if (tf == lowestTF) continue; // Ya se actualizó arriba
+                        
+                        int tfBarIndex = _barDataProvider.GetBarIndexFromTime(tf, chartTime);
+                        
+                        if (tfBarIndex >= 0)
+                        {
+                            // PROTECCIÓN: Solo procesar si es una barra nueva (evita 2.8M warnings)
+                            if (!_lastProcessedBarByTF.ContainsKey(tf) || _lastProcessedBarByTF[tf] < tfBarIndex)
+                            {
+                                _coreEngine.OnBarClose(tf, tfBarIndex);
+                                _lastProcessedBarByTF[tf] = tfBarIndex; // Actualizar tracking
+                                
+                                // TRAZA TEMPORAL: Reducida drásticamente para no inflar el log
+                                // Solo loggear cada 2000 barras o si falla
+                            }
+                            // Debug de YA PROCESADA: comentado para reducir log
+                            // else if (_fileLogger != null && barIndex % 1000 == 0)
+                            // {
+                            //     _fileLogger.Debug($"[ExpertTrader] 🔄   → OnBarClose({tf}m, {tfBarIndex}) [YA PROCESADA, omitida]");
+                            // }
+                        }
+                        else if (_fileLogger != null && barIndex % 1000 == 0)
+                        {
+                            _fileLogger.Warning($"[ExpertTrader] 🔄   → ⚠️ No se pudo mapear {tf}m para chartTime={chartTime:yyyy-MM-dd HH:mm}");
+                        }
+                    }
+                }
+                
+                if (isLowestTF && barIndex >= 20)
                 {
                     // Asegurar inicialización perezosa si algún componente es nulo (protege contra carreras del ciclo de vida)
                     EnsureInitializedLazy();
 
                     if (enableLogging)
-                        _logger.Debug($"[ExpertTrader] Generando decisión para BarIndex: {barIndex}");
-                    
-                    // Usar el TF más bajo de TimeframesToUse como referencia para el análisis
-                    int lowestTF = _config.TimeframesToUse.Min();
-                    int analysisBarIndex = _barDataProvider != null ? _barDataProvider.GetCurrentBarIndex(lowestTF) : -1;
+                        _logger.Debug($"[ExpertTrader] Generando decisión para BarIndex: {barIndex} (TF {tfMinutes}m)");
                     
                     // Null-guards y validaciones
                     if (_decisionEngine == null || _coreEngine == null || _barDataProvider == null)
@@ -442,15 +562,64 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                         _logger.Error("[ExpertTrader] Componentes nulos: DecisionEngine/CoreEngine/BarDataProvider. Abortando GenerateDecision.");
                         return;
                     }
+                    
+                    // Usar el barIndex del TF actual (que es el lowestTF)
+                    int lowestBarIndex = barIndex;
+                    DateTime chartTime = _barDataProvider.GetBarTime(lowestTF, lowestBarIndex);
+                    
+                    // Gate de sincronización: exigir que TODOS los TFs tengan índice válido en chartTime
+                    var tfMappings = _config.TimeframesToUse
+                        .Select(tf => new { TF = tf, Index = _barDataProvider.GetBarIndexFromTime(tf, chartTime) })
+                        .ToList();
+                    
+                    bool allMapped = tfMappings.All(m => m.Index >= 0);
+                    
+                    if (!allMapped)
+                    {
+                        _barsOmittedBySyncGate++;
+                        
+                        var failedTFs = tfMappings.Where(m => m.Index < 0).Select(m => m.TF).ToList();
+                        
+                        if (enableLogging && _fileLogger != null)
+                            _fileLogger.Warning($"[ExpertTrader] ⚠️ SyncGate OMITE: chartTime={chartTime:yyyy-MM-dd HH:mm} | TFs fallidos=[{string.Join(", ", failedTFs)}]m | Omitidas hasta ahora={_barsOmittedBySyncGate}");
+                        return;
+                    }
+                    
+                    _totalBarsProcessed++;
+                    
+                    // Log de mapeo exitoso SOLO en las primeras 10 barras o cada 1000 barras
+                    if (_fileLogger != null && (_totalBarsProcessed <= 10 || _totalBarsProcessed % 1000 == 0))
+                    {
+                        var mappingStr = string.Join(", ", tfMappings.Select(m => $"{m.TF}m@{m.Index}"));
+                        _fileLogger.Info($"[ExpertTrader] ✅ SyncGate OK: chartTime={chartTime:yyyy-MM-dd HH:mm} | Mapeos=[{mappingStr}] | Procesadas={_totalBarsProcessed}");
+                    }
+                    
+                    // Mostrar estadísticas cada 1000 barras procesadas (reducido de 100)
+                    if (_totalBarsProcessed % 1000 == 0 && _fileLogger != null)
+                    {
+                        int totalAttempts = _totalBarsProcessed + _barsOmittedBySyncGate;
+                        double processedPct = (_totalBarsProcessed * 100.0) / totalAttempts;
+                        double omittedPct = (_barsOmittedBySyncGate * 100.0) / totalAttempts;
+                        _fileLogger.Info($"[ExpertTrader] 📊 STATS SyncGate: Intentadas={totalAttempts} | Procesadas={_totalBarsProcessed} ({processedPct:F1}%) | Omitidas={_barsOmittedBySyncGate} ({omittedPct:F1}%)");
+                    }
+                    
+                    // Índice del TF de análisis mapeado por tiempo (no "último índice")
+                    int analysisBarIndex = _barDataProvider.GetBarIndexFromTime(lowestTF, chartTime);
                     if (analysisBarIndex < 0)
                     {
-                        _logger.Error($"[ExpertTrader] analysisBarIndex inválido ({analysisBarIndex}) para TF {lowestTF}m. Abortando GenerateDecision.");
+                        _logger.Error($"[ExpertTrader] ❌ analysisBarIndex inválido en {lowestTF}m para chartTime {chartTime:yyyy-MM-dd HH:mm} (esto NO debería pasar tras SyncGate).");
                         return;
                     }
                     
                     // Generar decisión con DecisionEngine usando el barIndex del TF de análisis
-                    _lastDecision = _decisionEngine.GenerateDecision(_barDataProvider, _coreEngine, analysisBarIndex, AccountSize);
+                    _lastDecision = _decisionEngine.GenerateDecision(_barDataProvider, _coreEngine, analysisBarIndex, lowestTF, AccountSize);
 
+                    // LOG de señales BUY/SELL generadas (SIEMPRE al archivo, no solo con enableLogging)
+                    if (_lastDecision != null && _lastDecision.Action != "WAIT" && _fileLogger != null)
+                    {
+                        _fileLogger.Info($"[ExpertTrader] 🎯 SEÑAL GENERADA | ID={_lastDecision.Id} | {_lastDecision.Action} @ {_lastDecision.Entry:F2} | Conf={_lastDecision.Confidence:F3} | SL={_lastDecision.StopLoss:F2} | TP={_lastDecision.TakeProfit:F2} | chartTime={chartTime:yyyy-MM-dd HH:mm} | analysisBar={analysisBarIndex}");
+                    }
+                    
                     // LOG DETALLADO DE LA DECISIÓN (valores SL/TP)
                     if (_lastDecision != null && enableLogging)
                     {
@@ -499,8 +668,10 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             // PASO 1: Actualizar estado de todas las órdenes activas
             _tradeManager.UpdateTrades(currentHigh, currentLow, analysisBarIndex, currentTime, currentPrice, _coreEngine, _barDataProvider);
 
-            // PASO 2: Si llega una NUEVA señal BUY/SELL, registrarla
+            // PASO 2: Si llega una NUEVA señal BUY/SELL, delegarla directamente a TradeManager
+            // TradeManager tiene el filtro de duplicados robusto (cooldown + tolerancia)
             bool isNewSignal = (_lastDecision.Action == "BUY" || _lastDecision.Action == "SELL");
+            
             if (isNewSignal)
             {
                 // Obtener el TF dominante de la última HeatZone (si existe)
@@ -511,16 +682,17 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 // Obtener el DominantStructureId de la decisión
                 string sourceStructureId = _lastDecision.DominantStructureId ?? string.Empty;
 
+                // DELEGAR a TradeManager: él filtrará duplicados con cooldown + tolerancia
+                // Este es el barIndex del lowestTF (5m), no del gráfico (15m)
                 _tradeManager.RegisterTrade(
                     _lastDecision.Action,
                     _lastDecision.Entry,
                     _lastDecision.StopLoss,
                     _lastDecision.TakeProfit,
-                    analysisBarIndex,
+                    analysisBarIndex,  // Este ya es del lowestTF (viene de ProcessTradeTracking)
                     currentTime,
                     tfDominante,
-                    sourceStructureId,
-                    currentPrice  // Precio de registro para determinar LIMIT vs STOP
+                    sourceStructureId
                 );
             }
         }
@@ -600,6 +772,13 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 {
                     _config = EngineConfig.LoadDefaults();
                     _config.EnableFastLoadFromJSON = EnableFastLoad;
+                    
+                    // Convertir días a barras según el TF más bajo
+                    int lowestTF = _config.TimeframesToUse.Min();
+                    int barsPorDia = 1440 / lowestTF; // 1440 minutos en un día
+                    _config.BacktestBarsForAnalysis = BacktestDays * barsPorDia;
+                    
+                    Print($"[ExpertTrader] LazyInit: Backtest configurado: {BacktestDays} días = {_config.BacktestBarsForAnalysis} barras");
                     Print("[ExpertTrader] LazyInit: Config cargada");
                 }
 
@@ -767,8 +946,11 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 var allTrades = _tradeManager.GetAllTrades();
                 var pendingTrades = allTrades.Where(t => t.Status == TradeStatus.PENDING).OrderBy(t => Math.Abs(t.Entry - Close[0])).ToList();
                 
-                // PARTE 1: Dibujar órdenes EJECUTADAS o CERRADAS (historial)
-                foreach (var trade in allTrades.Where(t => t.Status != TradeStatus.PENDING))
+                // PARTE 1: Dibujar solo EJECUTADAS o CERRADAS (SL/TP) - NO dibujar PENDING ni CANCELLED
+                foreach (var trade in allTrades.Where(t =>
+                    t.Status == TradeStatus.EXECUTED ||
+                    t.Status == TradeStatus.SL_HIT ||
+                    t.Status == TradeStatus.TP_HIT))
                 {
                     if (trade.Entry <= 0 || trade.ExecutionBar == -1)
                         continue;
@@ -776,6 +958,14 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     // V5.7e: Convertir ExecutionBar del TF de análisis al TF del gráfico usando tiempo
                     int barsAgo1 = GetBarsAgoFromTime(trade.ExecutionBarTime);
                     int barsAgo2 = trade.ExitBar > 0 ? GetBarsAgoFromTime(trade.ExitBarTime) : 0;
+                    
+                    // TRAZA CRÍTICA: Diagnóstico de dibujo
+                    if (_fileLogger != null && (State == State.Realtime || CurrentBar >= Count - 100))
+                    {
+                        _fileLogger.Info($"[DrawEntry] 🎨 Trade {trade.Id}: Entry={trade.Entry:F2} | ExecutionBar={trade.ExecutionBar} | ExecutionTime={trade.ExecutionBarTime:yyyy-MM-dd HH:mm}");
+                        _fileLogger.Info($"[DrawEntry] 🎨   barsAgo1={barsAgo1} | Time[{barsAgo1}]={Time[barsAgo1]:yyyy-MM-dd HH:mm} | High={High[barsAgo1]:F2} | Low={Low[barsAgo1]:F2}");
+                        _fileLogger.Info($"[DrawEntry] 🎨   Status={trade.Status} | Entry dentro de rango? {trade.Entry >= Low[barsAgo1] && trade.Entry <= High[barsAgo1]}");
+                    }
                     
                     // Validar que los índices sean válidos
                     if (barsAgo1 < 0 || (trade.ExitBar > 0 && barsAgo2 < 0))
@@ -882,6 +1072,18 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 
                 // Panel de órdenes pendientes movido a DrawPanel()
                 // Las líneas de puntos eliminadas para evitar confusión visual
+                
+                // Limpieza: remover dibujos de operaciones CANCELLED (si los hubiera)
+                foreach (var cancelled in allTrades.Where(t => t.Status == TradeStatus.CANCELLED))
+                {
+                    string tag = TAG_ENTRY + cancelled.Id;
+                    RemoveDrawObject(tag);
+                    RemoveDrawObject(tag + "_TPRect");
+                    RemoveDrawObject(tag + "_SLRect");
+                    RemoveDrawObject(tag + "_TP_INFO");
+                    RemoveDrawObject(tag + "_SL_INFO");
+                    RemoveDrawObject(tag + "_LABEL");
+                }
             }
             catch (Exception ex)
             {
@@ -1159,6 +1361,63 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         }
 
         #endregion
+        
+        #region Diagnóstico Multi-TF
+        
+        /// <summary>
+        /// Loguea los rangos temporales de cada TF para diagnóstico
+        /// </summary>
+        private void LogTFRanges()
+        {
+            try
+            {
+                // Solo loggear a archivo (no al OUTPUT para evitar llenar el buffer)
+                if (_fileLogger == null)
+                    return;
+                
+                if (BarsArray == null || BarsArray.Length == 0)
+                {
+                    _fileLogger.Info("[DIAGNOSTICO] ERROR: BarsArray no disponible");
+                    return;
+                }
+                
+                _fileLogger.Info("========================================");
+                _fileLogger.Info("[DIAGNOSTICO] RANGOS TEMPORALES DE CADA TF:");
+                _fileLogger.Info("========================================");
+                
+                for (int bip = 0; bip < BarsArray.Length; bip++)
+                {
+                    if (BarsArray[bip] == null)
+                        continue;
+                    
+                    var bars = BarsArray[bip];
+                    int totalBars = bars.Count;
+                    string tfName = bars.BarsPeriod.ToString();
+                    
+                    if (totalBars > 0)
+                    {
+                        DateTime firstBar = bars.GetTime(totalBars - 1); // Más antigua
+                        DateTime lastBar = bars.GetTime(0);              // Más reciente
+                        TimeSpan range = lastBar - firstBar;
+                        
+                        string msg = $"BIP={bip} TF={tfName} | Barras={totalBars} | {firstBar:yyyy-MM-dd HH:mm} → {lastBar:yyyy-MM-dd HH:mm} ({range.TotalDays:F1} días)";
+                        _fileLogger.Info($"[DIAGNOSTICO] {msg}");
+                    }
+                    else
+                    {
+                        _fileLogger.Info($"[DIAGNOSTICO] BIP={bip} TF={tfName} | SIN BARRAS");
+                    }
+                }
+                
+                _fileLogger.Info("========================================");
+            }
+            catch (Exception ex)
+            {
+                if (_fileLogger != null)
+                    _fileLogger.Error($"[DIAGNOSTICO] Error en LogTFRanges: {ex.Message}");
+            }
+        }
+        
+        #endregion
     }
 }
-

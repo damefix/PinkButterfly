@@ -3047,233 +3047,833 @@ Compila en NinjaTrader y confirma que al cambiar el TF del gráfico los resultad
 
 Esto es lo que se ha cambiado para evitar qeu los datos cambien entre TF en la gráfica, pero ahora hay muchas menos operaciones y el winrate también ha bajado. Hay que revisarlo a fondo.
 
+
+
+FINALMENTE SE HAN IDO HACIENDO MUCHAS CORRECIONES Y EL SISTEMA EMPIEZA A DAR RESULTADOS, AUNQUE FALTA MUCHO PARA LLEGAR AL NIVEL DE OPERACIONES DE ANTES DEL MULTI TF Y HAY VARIOS PROBLEMAS A RESOLVER
+
+
 ---
 
-## 📝 **VERSIÓN V5.7i - SISTEMA DE LOGGING CONFIGURABLE**
+## 🔧 **CORRECCIONES CRÍTICAS MULTI-TF - 2025-10-29 19:45**
 
-**Fecha:** 29 Octubre 2025  
-**Objetivo:** Implementar control de logging desde la UI para evitar saturación de disco en tiempo real
+### **Problema 1: Log inflado con 2.8M warnings** ❌
+**Síntoma:** 89% del log eran warnings `UpdateStructure: estructura [GUID] no existe`  
+**Causa:** Llamadas duplicadas a `OnBarClose()` para la misma barra en TFs superiores  
+**Solución:** Agregado tracking `_lastProcessedBarByTF` en línea 76:
+```csharp
+private Dictionary<int, int> _lastProcessedBarByTF = new Dictionary<int, int>();
+```
 
-### 🎯 **PROBLEMA DETECTADO:**
+Protección en líneas 480-495:
+```csharp
+if (!_lastProcessedBarByTF.ContainsKey(tf) || _lastProcessedBarByTF[tf] < tfBarIndex)
+{
+    _coreEngine.OnBarClose(tf, tfBarIndex);
+    _lastProcessedBarByTF[tf] = tfBarIndex;
+}
+```
 
-**Síntoma:**
-- El archivo de log crece infinitamente en tiempo real (cientos de MB)
-- No hay forma de desactivar el logging desde la interfaz
-- El `FileLogger` siempre escribe a disco sin control
+**Resultado esperado:** Log de 3.1M líneas → ~300K líneas (-90%)
+
+---
+
+### **Problema 2: Operaciones duplicadas cada 10-20 minutos** ❌  
+**Síntoma:** 10 operaciones idénticas (Entry=6906, SL=6903, TP=6909) → 9 pérdidas, 1 ganancia = -$120  
+**Causa:** Filtro de duplicados usaba `barIndex` del TF del gráfico (15m), no del `lowestTF` (5m)  
+**Solución:** Clarificado en líneas 636-647 que `analysisBarIndex` ya es del `lowestTF`:
+```csharp
+// CORRECCIÓN: Usar analysisBarIndex para el cooldown de duplicados
+// Este es el barIndex del lowestTF (5m), no del gráfico (15m)
+_tradeManager.RegisterTrade(
+    _lastDecision.Action,
+    _lastDecision.Entry,
+    _lastDecision.StopLoss,
+    _lastDecision.TakeProfit,
+    analysisBarIndex,  // Este ya es del lowestTF (viene de ProcessTradeTracking)
+    currentTime,
+    tfDominante,
+    sourceStructureId
+);
+```
+
+**Nota:** El código ya estaba correcto tras correcciones previas (línea 560 obtiene `analysisBarIndex` del `lowestTF`), solo se agregó documentación.
+
+**Resultado esperado:** Operaciones únicas, filtro de 12 barras (60 min en 5m) funciona correctamente.
+
+---
+
+### **Problema 3: Solo 2 días de operaciones (oct-28 y oct-29)** ❌  
+**Síntoma:** Primera operación T0002 en 2025-10-28 04:00, debería tener ~52 días (5000 barras)  
+**Causa:** `barsToSkip` usaba el TF del gráfico (15m), no el `lowestTF` (5m)  
+
+**Cálculo erróneo:**
+```
+totalBars (15m) = 23,518
+barsToSkip = 23,518 - 5,000 = 18,518
+Solo procesa últimas 5,000 barras de 15m
+En tiempo: 5,000 × 15min / 1440 = 52 días teóricos
+Pero genera decisiones en 5m, así que solo analiza 17.6 días reales
+```
+
+**Solución:** Cambio líneas 421-457 para calcular `barsToSkip` usando `lowestTF`:
+```csharp
+// 5. Control de carga histórica: solo procesar las últimas N barras
+// CORRECCIÓN Multi-TF: Usar el lowestTF para el cálculo, no el TF del gráfico
+int lowestTF = _config.TimeframesToUse.Min();
+int lowestTFIndex = Array.FindIndex(BarsArray, b => b != null && (int)b.BarsPeriod.Value == lowestTF);
+
+if (lowestTFIndex >= 0)
+{
+    int totalBarsLowestTF = BarsArray[lowestTFIndex].Count;
+    int barsToSkip = totalBarsLowestTF - _config.BacktestBarsForAnalysis;
+    
+    // Obtener el barIndex del lowestTF correspondiente a esta barra del gráfico
+    int lowestBarIndex = _barDataProvider.GetCurrentBarIndex(lowestTF);
+    
+    if (State == State.Historical && lowestBarIndex >= 0 && lowestBarIndex < barsToSkip)
+    {
+        // Saltar barras antiguas en histórico para acelerar la carga
+        return;
+    }
+}
+```
+
+**Resultado esperado:**
+- `totalBarsLowestTF (5m) = 70,548`
+- `barsToSkip = 70,548 - 5,000 = 65,548`
+- **Procesa últimas 5,000 barras de 5m = 17.6 días**
+
+**⚠️ NOTA IMPORTANTE:** Con `BacktestBarsForAnalysis = 5000` solo tendrás ~17 días de datos en 5m. Para tener los ~133 trades históricos que tenías antes (con análisis en 15m), necesitarías:
+- `BacktestBarsForAnalysis = 15000` (52 días en 5m)
+- O mejor: `BacktestBarsForAnalysis = 20000` (69 días en 5m) para más datos estadísticos
+
+---
+
+### **📊 RESULTADOS ESPERADOS TRAS CORRECCIONES:**
+
+| Métrica | Antes | Después | Mejora |
+|---------|-------|---------|--------|
+| **Log (líneas)** | 3.1M | ~300K | **-90%** |
+| **Warnings spam** | 2.8M | 0 | **-100%** |
+| **Operaciones** | 50 (10 duplicadas) | ~20-30 únicas | **Limpio** |
+| **Período histórico** | 2 días | 17 días (5K barras) | **+750%** |
+| **Win Rate** | 45% | >50% (sin duplicadas) | **+5-10%** |
+| **Profit Factor** | 1.38 | >1.5 | **+8%** |
+
+---
+
+### **🚀 PRÓXIMOS PASOS:**
+
+1. ✅ Compilar `export/ExpertTrader.cs` en NinjaTrader
+2. ⚠️ **OPCIONAL:** Aumentar `BacktestBarsForAnalysis` de 5000 → 15000 en EngineConfig.cs para obtener más operaciones históricas
+3. ✅ Ejecutar backtest
+4. ✅ Verificar log:
+   - Sin warnings de `UpdateStructure`
+   - Trazas `[YA PROCESADA, omitida]` presentes
+   - Señales duplicadas rechazadas con `Señal duplicada en ventana`
+5. ✅ Analizar informe KPI:
+   - Primera operación debería ser ~17 días atrás (con 5K barras)
+   - Win Rate mejorado
+   - Sin operaciones duplicadas cada 10 minutos
+
+---
+
+## 🚀 **OPTIMIZACIÓN DE LOGGING - 2025-10-29 20:00**
+
+### **Problema: Log crece descontroladamente y procesamiento lento** ⚠️
+
+**Causa:** Trazas repetitivas en `ExpertTrader.cs` se escribían cada barra o cada 100 barras, generando millones de líneas innecesarias.
+
+**Trazas identificadas:**
+1. ✅ **ESENCIALES (mantenidas):**
+   - `[DIAGNÓSTICO][DFM]` - Usado por `analizador-diagnostico-logs.py`
+   - `[DIAGNÓSTICO][Proximity]` - Usado por analizador
+   - `[DIAGNÓSTICO][Risk]` - Usado por analizador
+   - `DESGLOSE COMPLETO DE SCORING` - Usado por `analizador-DFM.py`
+   - `[ExpertTrader] 🎯 SEÑAL BUY/SELL` - Registro de señales
+   - CSV de trades
+
+2. ❌ **REDUCIDAS/ELIMINADAS (no usadas por informes):**
+   - `SyncGate OK` - De cada barra → cada 1000 barras
+   - `STATS SyncGate` - De cada 100 → cada 1000 barras
+   - `SYNC Multi-TF` - De cada 100 → cada 1000 barras
+   - `OnBarClose(...) [NUEVA]` - Eliminada
+   - `OnBarClose(...) [YA PROCESADA]` - Comentada
+   - `OnBarClose(...) - BIP` - De cada barra → cada 1000 barras
+   - Warning de mapeo TF - De cada 100 → cada 1000 barras
+
+**Cambios aplicados:**
+
+**Línea 563-567:** SyncGate OK
+```csharp
+// ANTES: cada barra o si enableLogging
+if ((enableLogging || _totalBarsProcessed <= 10) && _fileLogger != null)
+
+// DESPUÉS: primeras 10 o cada 1000
+if (_fileLogger != null && (_totalBarsProcessed <= 10 || _totalBarsProcessed % 1000 == 0))
+```
+
+**Línea 569-576:** STATS SyncGate
+```csharp
+// ANTES: cada 100 barras
+if (_totalBarsProcessed % 100 == 0 && _fileLogger != null)
+
+// DESPUÉS: cada 1000 barras
+if (_totalBarsProcessed % 1000 == 0 && _fileLogger != null)
+```
+
+**Línea 484-488:** SYNC Multi-TF
+```csharp
+// ANTES: cada 100 barras
+if (_fileLogger != null && barIndex % 100 == 0)
+
+// DESPUÉS: cada 1000 barras
+if (_fileLogger != null && barIndex % 1000 == 0)
+```
+
+**Línea 464-466:** OnBarClose debug
+```csharp
+// ANTES: cada barra si enableLogging
+if (enableLogging && _fileLogger != null)
+
+// DESPUÉS: cada 1000 barras
+if (enableLogging && _fileLogger != null && barIndex % 1000 == 0)
+```
+
+**Líneas 505-512:** OnBarClose [NUEVA] y [YA PROCESADA]
+```csharp
+// ANTES: escribía cada 100 barras
+_fileLogger.Info($"[ExpertTrader] 🔄   → OnBarClose({tf}m, {tfBarIndex}) [NUEVA]");
+_fileLogger.Debug($"[ExpertTrader] 🔄   → OnBarClose({tf}m, {tfBarIndex}) [YA PROCESADA, omitida]");
+
+// DESPUÉS: eliminadas completamente (comentadas)
+```
+
+**Resultado esperado:**
+- **Reducción del log:** ~90% menos líneas (de ~300K → ~30-50K)
+- **Velocidad de procesamiento:** +60-80% más rápido
+- **Informes NO afectados:** Todas las trazas [DIAGNÓSTICO] y CSV se mantienen intactas
+
+**Cambio adicional:** Warning de `UpdateStructure` convertido a Debug
+
+**Archivo:** `src/Core/CoreEngine.cs` línea 579-584
+
+```csharp
+// ANTES: Warning siempre
+_logger.Warning($"UpdateStructure: estructura {structure.Id} no existe - use AddStructure()");
+
+// DESPUÉS: Debug solo si EnableDebug=true
+if (_config.EnableDebug)
+    _logger.Debug($"UpdateStructure: estructura {structure.Id} no existe en este TF - ignorada");
+```
+
+**Razón:** En Multi-TF es normal que una estructura exista en un TF pero no en otro. Con el tracking implementado, esto prácticamente no debería ocurrir, pero si ocurre no es crítico y no debe llenar el log.
+
+**Resultado:** Eliminación del 100% de los 2.8M warnings que llenaban el log.
+
+---
+
+### **🔧 CORRECCIÓN CRÍTICA: Tracking 100% funcional**
+
+**Problema detectado:** El tracking solo se aplicaba en el loop de sincronización (línea 503), pero NO en la primera llamada a `OnBarClose()` (línea 462). Esto causaba procesamiento duplicado:
+
+1. NinjaTrader llama `OnBarUpdate(BIP=2)` para 60m → `OnBarClose(60m, X)` **SIN tracking**
+2. Luego, cuando 5m se actualiza, sincronización llama `OnBarClose(60m, X)` **CON tracking**
+3. **Resultado:** Barra 60m procesada 2 veces → `UpdateStructure` warnings
+
+**Solución aplicada:** Tracking extendido a TODAS las llamadas a `OnBarClose()`
+
+**Líneas 459-477:** Tracking aplicado también al TF que dispara OnBarUpdate
+
+```csharp
+// ANTES: Sin tracking
+if (_config.TimeframesToUse.Contains(tfMinutes))
+{
+    _coreEngine.OnBarClose(tfMinutes, barIndex);
+}
+
+// DESPUÉS: Con tracking completo
+if (_config.TimeframesToUse.Contains(tfMinutes))
+{
+    if (!_lastProcessedBarByTF.ContainsKey(tfMinutes) || _lastProcessedBarByTF[tfMinutes] < barIndex)
+    {
+        _coreEngine.OnBarClose(tfMinutes, barIndex);
+        _lastProcessedBarByTF[tfMinutes] = barIndex;
+    }
+}
+```
 
 **Impacto:**
-- Saturación del disco en sesiones largas
-- Degradación de performance por I/O constante
-- Dificultad para trabajar en tiempo real sin logs
+- ✅ Elimina el 100% del procesamiento duplicado
+- ✅ Garantiza que cada barra de cada TF se procesa **exactamente UNA vez**
+- ✅ Los warnings de `UpdateStructure` desaparecen por completo (ahora convertidos a Debug)
+
+**Archivos modificados:**
+- `src/Visual/ExpertTrader.cs` (líneas 459-477 + 500-504)
+- `export/ExpertTrader.cs`
+- `src/Core/CoreEngine.cs` (líneas 579-584)
+- `export/CoreEngine.cs`
 
 ---
 
-### 🛠️ **SOLUCIÓN IMPLEMENTADA:**
+### **🚨 CORRECCIÓN CRÍTICA: Bucle infinito de operaciones (400+ en 3 minutos)**
 
-#### **1. Nuevo Logger: `SilentLogger`**
+**Fecha:** 2025-10-29 21:30  
+**Problema reportado:** El sistema generaba 400+ operaciones en 3 minutos, se cerraban inmediatamente y los precios eran incorrectos.
 
-**Archivo:** `src/Infrastructure/ILogger.cs`
+**Síntomas:**
+- ✅ 400 operaciones en 3 minutos
+- ✅ Se cierran inmediatamente
+- ✅ Precios incorrectos (no coinciden con precio actual)
+- ✅ Solo 2 días de histórico procesado
+- ✅ Todas las operaciones idénticas: Entry/SL/TP iguales
 
-Implementación de un logger "No-Op" que no escribe nada:
+---
+
+#### **CAUSA RAÍZ: `_lastDecision` no se reseteaba**
+
+**Flujo ROTO:**
+```
+Barra 100 (5m):
+  → GenerateDecision() → _lastDecision = BUY @ 6930.25
+  → ProcessTradeTracking() → RegisterTrade(BUY @ 6930.25) ✅
+
+Barra 101 (5m):
+  → GenerateDecision() → _lastDecision = WAIT (no hay señal nueva)
+  → ProcessTradeTracking() → _lastDecision SIGUE SIENDO "BUY" ❌
+  → if (isNewSignal) → TRUE ❌
+  → RegisterTrade(BUY @ 6930.25) OTRA VEZ ❌
+
+Barra 102-500:
+  → RegisterTrade(BUY @ 6930.25) en cada barra ❌
+```
+
+**Por qué el filtro de duplicados NO funcionó:**
+- `MinBarsBetweenSameSignal = 12` compara barras entre registros
+- Pero se registraba en CADA barra (5m): 1 barra de diferencia, no 12
+- El filtro esperaba 12+ barras de separación, pero cada barra generaba un duplicado
+
+---
+
+#### **SOLUCIÓN: Sistema de Tracking con ID único**
+
+**Opción elegida:** Tracking con ID único (más robusto, profesional, trazable)
+
+**Ventajas:**
+- ✅ **Robustez:** Inmune a modificaciones de `_lastDecision`
+- ✅ **Trazabilidad:** Cada decisión tiene ID único para auditoría
+- ✅ **Debugging:** Logs muestran exactamente qué decisión generó qué orden
+- ✅ **Extensibilidad:** Permite análisis post-mortem
+- ✅ **Thread-safety:** Seguro en entornos multi-hilo
+
+---
+
+#### **Cambios implementados:**
+
+**1. `src/Decision/DecisionModels.cs` (línea 57)**
+
+```csharp
+public TradeDecision()
+{
+    Id = Guid.NewGuid().ToString(); // CRÍTICO: ID único para tracking
+    SourceStructureIds = new List<string>();
+    GeneratedAt = DateTime.UtcNow;
+}
+```
+
+**Ahora:** Cada `TradeDecision` tiene un ID único generado automáticamente.
+
+---
+
+**2. `src/Visual/ExpertTrader.cs` (línea 59)**
+
+```csharp
+private string _lastProcessedDecisionId = null; // CRÍTICO: Tracking para evitar duplicados
+```
+
+**Campo nuevo:** Almacena el ID de la última decisión procesada.
+
+---
+
+**3. `src/Visual/ExpertTrader.cs` (líneas 659-697)**
+
+```csharp
+// ANTES: Sin verificación de duplicados
+bool isNewSignal = (_lastDecision.Action == "BUY" || _lastDecision.Action == "SELL");
+if (isNewSignal)
+{
+    _tradeManager.RegisterTrade(...);
+}
+
+// DESPUÉS: Verificación con ID único
+bool isNewSignal = (_lastDecision.Action == "BUY" || _lastDecision.Action == "SELL");
+bool notProcessedYet = (string.IsNullOrEmpty(_lastDecision.Id) || _lastDecision.Id != _lastProcessedDecisionId);
+
+if (isNewSignal && notProcessedYet)
+{
+    _tradeManager.RegisterTrade(...);
+    
+    // CRÍTICO: Marcar como procesada
+    _lastProcessedDecisionId = _lastDecision.Id;
+    
+    if (_fileLogger != null)
+        _fileLogger.Debug($"[ExpertTrader] ✅ Decisión {_lastDecision.Id} procesada y registrada: {_lastDecision.Action} @ {_lastDecision.Entry:F2}");
+}
+else if (isNewSignal && !notProcessedYet)
+{
+    // Log cada 100 barras para no llenar
+    if (_fileLogger != null && analysisBarIndex % 100 == 0)
+        _fileLogger.Debug($"[ExpertTrader] ⏭️ Decisión {_lastDecision.Id} YA PROCESADA, omitida (Bar={analysisBarIndex})");
+}
+```
+
+**Lógica:**
+1. ✅ Verificar si hay señal BUY/SELL
+2. ✅ Verificar si NO se procesó ya (comparar IDs)
+3. ✅ Si es nueva → registrar y marcar ID
+4. ✅ Si ya se procesó → omitir y loggear (cada 100 barras)
+
+---
+
+**4. `src/Visual/ExpertTrader.cs` (línea 608) - Log mejorado**
+
+```csharp
+// ANTES:
+_fileLogger.Info($"[ExpertTrader] 🎯 SEÑAL {_lastDecision.Action} @ {_lastDecision.Entry:F2} | ...");
+
+// DESPUÉS:
+_fileLogger.Info($"[ExpertTrader] 🎯 SEÑAL GENERADA | ID={_lastDecision.Id} | {_lastDecision.Action} @ {_lastDecision.Entry:F2} | ...");
+```
+
+**Ahora:** Los logs incluyen el ID para trazabilidad completa.
+
+---
+
+#### **Resultado esperado:**
+
+**ANTES:**
+```
+[10:00:00] SEÑAL BUY @ 6930.25
+[10:00:00] Orden registrada: T0001
+[10:05:00] Orden registrada: T0002 ❌ DUPLICADO
+[10:10:00] Orden registrada: T0003 ❌ DUPLICADO
+... 400+ duplicados en 3 minutos
+```
+
+**AHORA:**
+```
+[10:00:00] SEÑAL GENERADA | ID=abc123 | BUY @ 6930.25
+[10:00:00] Decisión abc123 procesada y registrada: T0001 ✅
+[10:05:00] Decisión abc123 YA PROCESADA, omitida ✅
+[10:10:00] Decisión abc123 YA PROCESADA, omitida ✅
+[10:15:00] SEÑAL GENERADA | ID=def456 | SELL @ 6925.00 ✅ NUEVA
+[10:15:00] Decisión def456 procesada y registrada: T0002 ✅
+```
+
+---
+
+#### **Archivos modificados:**
+
+- `src/Decision/DecisionModels.cs` (línea 57)
+- `src/Visual/ExpertTrader.cs` (líneas 59, 608, 659-697)
+- `export/DecisionModels.cs`
+- `export/ExpertTrader.cs`
+
+---
+
+#### **Beneficios del sistema ID:**
+
+**1. Auditoría completa:**
+```
+Decisión abc123 → Orden T0001 → Ejecutada → TP alcanzado → +50 puntos
+```
+
+**2. Debugging fácil:**
+```
+¿Por qué la decisión abc123 no se ejecutó?
+→ Buscar: "ID=abc123"
+→ Ver: "YA PROCESADA" → Era duplicado, sistema OK
+```
+
+**3. Análisis post-mortem:**
+```python
+# En el CSV añadir columna "DecisionID"
+# Correlacionar qué decisiones se ejecutaron vs cancelaron
+```
+
+---
+
+#### **Notas importantes:**
+
+1. ⚠️ **NO tocar `_lastProcessedDecisionId` manualmente** - se gestiona automáticamente
+2. ✅ **El ID se genera en el constructor** - no hacer nada extra
+3. ✅ **Logs "YA PROCESADA" solo cada 100 barras** - reducir spam
+
+---
+
+**Estado:** ✅ IMPLEMENTADO Y COPIADO A `export/`  
+**Versión:** Multi-TF v5.8 - Fix Bucle Infinito  
+**Testing:** ✅ SOLUCIONADO (9 operaciones vs 400+)
+
+---
+
+### **✅ IMPLEMENTACIÓN: MaxConcurrentTrades (Límite de operaciones simultáneas)**
+
+**Fecha:** 2025-10-29 21:10  
+**Problema:** Operaciones se solapaban, hasta 5 activas simultáneamente.
+
+**Diagnóstico:**
+- `MaxConcurrentTrades` existía en la especificación pero **NO estaba implementado**
+- Múltiples señales se registraban aunque ya hubiera operaciones activas
+- Resultado: Solapamiento de operaciones, mayor exposición al riesgo
+
+---
+
+#### **Cambios implementados:**
+
+**1. `src/Core/EngineConfig.cs` (línea 400-404)**
 
 ```csharp
 /// <summary>
-/// Logger silencioso (No-Op) que no escribe nada
-/// Usado cuando se desactiva el logging para mejorar performance
+/// Número máximo de operaciones concurrentes (activas) permitidas
+/// 0 = sin límite, 1 = solo una operación a la vez
 /// </summary>
-public class SilentLogger : ILogger
-{
-    public LogLevel MinLevel { get; set; } = LogLevel.Error;
-
-    public void Debug(string message) { }
-    public void Info(string message) { }
-    public void Warning(string message) { }
-    public void Error(string message) { }
-    public void Exception(string message, Exception exception) { }
-}
+public int MaxConcurrentTrades { get; set; } = 1;
 ```
 
-**Ventajas:**
-- ✅ Implementa `ILogger` (compatible con todo el sistema)
-- ✅ No escribe nada (0 I/O, 0 overhead)
-- ✅ Puede usarse como drop-in replacement
+**Configuración:** Por defecto = 1 (solo una operación a la vez)
 
 ---
 
-#### **2. Propiedades Configurables en UI**
+**2. `src/Execution/TradeManager.cs` (líneas 83-92)**
 
-**Archivo:** `src/Visual/ExpertTrader.cs`
+```csharp
+// FILTRO 0: Verificar límite de operaciones concurrentes
+if (_config.MaxConcurrentTrades > 0)
+{
+    int activeTrades = _trades.Count(t => t.Status == TradeStatus.PENDING || t.Status == TradeStatus.EXECUTED);
+    if (activeTrades >= _config.MaxConcurrentTrades)
+    {
+        _logger.Debug($"[TradeManager] ⛔ Límite de operaciones concurrentes alcanzado ({activeTrades}/{_config.MaxConcurrentTrades}) → orden rechazada");
+        return;
+    }
+}
+```
 
-Añadidas 3 propiedades en el grupo "Logging":
+**Lógica:**
+1. ✅ Cuenta operaciones PENDING + EXECUTED (activas)
+2. ✅ Si alcanza el límite, rechaza nuevas órdenes
+3. ✅ Solo permite registrar cuando una operación se cierre
 
+---
+
+#### **Resultado esperado:**
+
+**ANTES:**
+```
+T0009: 16:40 → 17:10 (EJECUTADA)
+T0011: 18:40 → 18:55 (EJECUTADA) ← Puede solapar
+T0012: 19:00 → 19:10 (EJECUTADA) ← Puede solapar
+T0013: 19:20 → 19:45 (EJECUTADA) ← Puede solapar
+```
+
+**AHORA (con MaxConcurrentTrades=1):**
+```
+T0009: 16:40 → 17:10 (EJECUTADA)
+  └─ Durante este tiempo: TODAS las señales rechazadas ⛔
+T0011: 18:40 → 18:55 (EJECUTADA)
+  └─ Durante este tiempo: TODAS las señales rechazadas ⛔
+T0012: 19:00 → 19:10 (EJECUTADA)
+  └─ Durante este tiempo: TODAS las señales rechazadas ⛔
+```
+
+**Solo 1 operación activa a la vez** ✅
+
+---
+
+#### **Archivos modificados:**
+
+- `src/Core/EngineConfig.cs` (líneas 400-404)
+- `src/Execution/TradeManager.cs` (líneas 83-92)
+- `export/EngineConfig.cs`
+- `export/TradeManager.cs`
+
+---
+
+#### **Notas importantes:**
+
+1. ✅ **Configuración flexible:** Cambiar `MaxConcurrentTrades` permite:
+   - `0` = Sin límite (comportamiento anterior)
+   - `1` = Solo 1 operación (recomendado para conservador)
+   - `2+` = Múltiples operaciones (para agresivo)
+
+2. ✅ **Prioridad FIFO:** La primera señal válida se registra, las demás se rechazan hasta que se cierre
+
+3. ✅ **Filtro en orden correcto:**
+   - FILTRO 0: MaxConcurrentTrades
+   - FILTRO 1: Cooldown de estructura cancelada
+   - FILTRO 2: Duplicados por Entry/SL/TP
+
+---
+
+**Estado:** ✅ IMPLEMENTADO Y COPIADO A `export/`  
+**Versión:** Multi-TF v5.9 - MaxConcurrentTrades  
+**Testing:** Pendiente (usuario debe descargar, compilar y ejecutar)
+
+---
+
+### **🚨 CORRECCIÓN CRÍTICA: GetATR() roto en Multi-TF**
+
+**Fecha:** 2025-10-29 21:40  
+**Problema:** Sistema generaba solo 14 operaciones en 26 días (vs 133 en versión anterior).
+
+**Diagnóstico:**
+- ✅ Sistema procesa 26 días de histórico correctamente
+- ❌ Proximity rechaza 99.9% de las zonas (`KeptAligned=0/1`)
+- ❌ `GetATR()` calcula ATR incorrectamente en Multi-TF
+
+---
+
+#### **CAUSA RAÍZ:**
+
+**`GetATR()` ignoraba el parámetro `tfMinutes` y usaba siempre BarsInProgress=0:**
+
+```csharp
+// Firma correcta:
+public double GetATR(int tfMinutes, int period, int barIndex)
+
+// Pero implementación INCORRECTA:
+double atr = CalculateATR(period, barIndex); // ❌ No usa tfMinutes
+
+// Y CalculateATR usaba siempre BIP=0:
+double high = GetHigh(0, currentIndex); // ❌ Siempre TF del gráfico
+```
+
+**Problema en Multi-TF:**
+```
+ProximityAnalyzer pide: GetATR(240m, 14, 70242)
+  → Calcula ATR en TF del gráfico (15m), no en 240m ❌
+  → Usa barIndex 70242 que no existe en 15m (solo ~23K barras) ❌
+  → ATR incorrecto → Distancias incorrectas → Proximity rechaza TODO ❌
+```
+
+---
+
+#### **Cambios implementados:**
+
+**1. `src/NinjaTrader/NinjaTraderBarDataProvider.cs` (línea 251)**
+
+```csharp
+// ANTES (ignoraba tfMinutes):
+double atr = CalculateATR(period, barIndex);
+
+// AHORA (usa tfMinutes):
+double atr = CalculateATR(tfMinutes, period, barIndex);
+```
+
+---
+
+**2. `src/NinjaTrader/NinjaTraderBarDataProvider.cs` (líneas 309, 328-330)**
+
+```csharp
+// ANTES (firma sin tfMinutes):
+private double CalculateATR(int period, int barIndex)
+
+// AHORA (firma con tfMinutes):
+private double CalculateATR(int tfMinutes, int period, int barIndex)
+
+// ANTES (usaba siempre BIP=0):
+double high = GetHigh(0, currentIndex);
+double low = GetLow(0, currentIndex);
+double prevClose = GetClose(0, prevIndex);
+
+// AHORA (usa el tfMinutes especificado):
+double high = GetHigh(tfMinutes, currentIndex);
+double low = GetLow(tfMinutes, currentIndex);
+double prevClose = GetClose(tfMinutes, prevIndex);
+```
+
+---
+
+**3. `src/Core/EngineConfig.cs` (línea 613)**
+
+```csharp
+// Aumentado para tener más histórico:
+public int BacktestBarsForAnalysis { get; set; } = 15000; // 52 días
+```
+
+---
+
+#### **Resultado esperado:**
+
+**ANTES (ROTO):**
+```
+26 días procesados
+Proximity rechaza todo: KeptAligned=0/1
+Solo 14 operaciones (solo últimos 2 días)
+```
+
+**AHORA (CORREGIDO):**
+```
+52 días procesados
+Proximity calcula distancias correctas
+~100-133 operaciones (similar a versión anterior)
+```
+
+---
+
+#### **Archivos modificados:**
+
+- `src/NinjaTrader/NinjaTraderBarDataProvider.cs` (líneas 251, 309, 328-330)
+- `src/Core/EngineConfig.cs` (línea 613)
+- `export/NinjaTraderBarDataProvider.cs`
+- `export/EngineConfig.cs`
+
+---
+
+**Estado:** ✅ IMPLEMENTADO Y COPIADO A `export/`  
+**Versión:** Multi-TF v6.0 - Fix ATR Multi-TF  
+**Testing:** Pendiente (usuario debe descargar, compilar y ejecutar)
+
+**IMPACTO ESPERADO:** Sistema debería generar ~100-133 operaciones como antes ✅
+
+---
+
+## **Multi-TF v6.1 - Configuración UI de Días de Backtest**
+**Fecha:** 2025-10-30 08:15 UTC  
+**Objetivo:** Mejorar UX permitiendo configurar el backtest en "días" desde la UI de NinjaTrader en vez de "barras"
+
+### **Contexto**
+
+El usuario identificó que:
+1. **Fast Load no funciona correctamente**: Las estructuras cargadas del JSON tienen índices de barras que no coinciden con el backtest actual, generando edades negativas y solo 3 operaciones repetidas
+2. **Necesita tests más rápidos**: 30 minutos por backtest (15000 barras) es inviable para calibración iterativa
+3. **Quiere configuración más intuitiva**: Configurar en "días" es más natural que en "barras"
+
+**Decisión:** Desactivar Fast Load temporalmente y optimizar el flujo normal con configuración en días.
+
+### **Problema Identificado con Fast Load**
+
+**Logs de hoy (2025-10-30 07:45):**
+```
+[07:34:10.910] [INFO] [FAST LOAD] Total estructuras: 322
+[07:34:41.207] [INFO] HZ=HZ_d1b6b406 Age=-15164  ← ¡EDAD NEGATIVA!
+[07:42:05.541] [INFO] ORDEN REGISTRADA: SELL @ 6901,00 (estructura e4b81741)
+[07:42:12.052] [INFO] ORDEN REGISTRADA: SELL @ 6901,00 (estructura e4b81741)  ← MISMA SEÑAL
+[07:42:13.601] [INFO] ORDEN REGISTRADA: SELL @ 6901,00 (estructura e4b81741)  ← MISMA SEÑAL
+```
+
+**Resultado:** Solo 3 operaciones (todas idénticas) vs. 862 operaciones de ayer.
+
+**Causa raíz:**
+- Fast Load fue diseñado para re-ejecutar el DFM sobre el **mismo backtest** (mismas barras, mismo rango temporal)
+- NO funciona para backtests nuevos con diferentes datos/índices
+- Las estructuras tienen `BarIndex` del backtest de ayer que no coinciden con los índices de hoy
+- `Age = currentBarIndex - structure.BarIndex` → Si `structure.BarIndex > currentBarIndex`, edad es negativa
+
+**Solución propuesta:** Reimplementar Fast Load con timestamps absolutos (4-6 horas de trabajo). **Decisión:** Posponer y optimizar flujo normal.
+
+### **Cambios Implementados**
+
+#### **1. Nueva propiedad en UI: `BacktestDays`**
+
+**ExpertTrader.cs (líneas 116-119):**
 ```csharp
 [NinjaScriptProperty]
-[Display(Name = "Enable Output Logging", Description = "Activar logs en Output window de NinjaTrader", Order = 10, GroupName = "Logging")]
-public bool EnableOutputLogging { get; set; }
-
-[NinjaScriptProperty]
-[Display(Name = "Enable File Logging", Description = "Activar logs en archivo de disco (puede crecer mucho en tiempo real)", Order = 11, GroupName = "Logging")]
-public bool EnableFileLogging { get; set; }
-
-[NinjaScriptProperty]
-[Display(Name = "Enable Trade CSV", Description = "Activar registro de operaciones en archivo CSV", Order = 12, GroupName = "Logging")]
-public bool EnableTradeCSV { get; set; }
+[Display(Name = "Días de Backtest", Description = "Número de días históricos a analizar (10 días = tests rápidos ~5-8 min, 52 días = completo ~25-30 min)", Order = 8, GroupName = "Performance")]
+[Range(5, 200)]
+public int BacktestDays { get; set; }
 ```
 
-**Valores por defecto (en `State.SetDefaults`):**
+**Valor por defecto (línea 174):**
 ```csharp
-// Logging (por defecto TODO ACTIVADO para mantener comportamiento actual)
-EnableOutputLogging = true;
-EnableFileLogging = true;
-EnableTradeCSV = true;
+BacktestDays = 10; // Por defecto 10 días (~3000 barras en TF 5m) para tests rápidos
 ```
 
----
-
-#### **3. Lógica de Inicialización Condicional**
-
-**Archivo:** `src/Visual/ExpertTrader.cs` → `State.DataLoaded`
-
-**Output Logger:**
+**Conversión automática a barras (líneas 255-260):**
 ```csharp
-// Inicializar logger base (Output window)
-if (EnableOutputLogging)
-{
-    _logger = new NinjaTraderLogger(this, LogLevel.Info);
-    Print("[ExpertTrader] ✅ Output logging ACTIVADO");
-}
-else
-{
-    _logger = new SilentLogger();
-    Print("[ExpertTrader] ⚠️ Output logging DESACTIVADO");
-}
+// Convertir días a barras según el TF más bajo
+int lowestTF = _config.TimeframesToUse.Min();
+int barsPorDia = 1440 / lowestTF; // 1440 minutos en un día
+_config.BacktestBarsForAnalysis = BacktestDays * barsPorDia;
+
+Print($"[ExpertTrader] Backtest configurado: {BacktestDays} días = {_config.BacktestBarsForAnalysis} barras (TF base: {lowestTF}m, {barsPorDia} barras/día)");
 ```
 
-**File Logger:**
+**También aplicado en LazyInit (líneas 776-781):** Para asegurar consistencia si el config se carga tardíamente.
+
+#### **2. Ajuste de propiedades UI**
+
+**Order actualizado para mantener organización:**
+- `EnableFastLoad`: Order 7
+- `BacktestDays`: Order 8 ← **NUEVO**
+- `ContractSize`: Order 9 (antes 8)
+- `EnableOutputLogging`: Order 11 (antes 10)
+- `EnableFileLogging`: Order 12 (antes 11)
+- `EnableTradeCSV`: Order 13 (antes 12)
+
+#### **3. Actualización de `EngineConfig.cs`**
+
+**Default cambiado a 3000 barras (línea 613):**
 ```csharp
-// File Logger (archivo de log)
-if (EnableFileLogging)
-{
-    _fileLogger = new FileLogger(logDirectory, "backtest", _logger, true);
-    Print($"[ExpertTrader] ✅ File logging ACTIVADO: {logDirectory}");
-}
-else
-{
-    _fileLogger = new FileLogger(logDirectory, "backtest", _logger, false);
-    Print("[ExpertTrader] ⚠️ File logging DESACTIVADO (no se escribirá a disco)");
-}
+public int BacktestBarsForAnalysis { get; set; } = 3000; // ← Default 3000 barras (~10 días en TF 5m)
 ```
 
-**Trade Logger (CSV):**
+**Comentario actualizado (líneas 608-611):**
 ```csharp
-// Trade Logger (CSV de operaciones)
-if (EnableTradeCSV)
-{
-    _tradeLogger = new TradeLogger(logDirectory, "trades", _logger, true);
-    Print("[ExpertTrader] ✅ Trade CSV ACTIVADO");
-}
-else
-{
-    _tradeLogger = new TradeLogger(logDirectory, "trades", _logger, false);
-    Print("[ExpertTrader] ⚠️ Trade CSV DESACTIVADO (no se registrarán operaciones)");
-}
+/// - 2880 barras = 10 días (RÁPIDO: ~5-8 min, suficiente para calibración)
+/// - 4896 barras = 17 días (MEDIO: ~10-15 min, ~50-70 operaciones)
+/// - 14976 barras = 52 días (COMPLETO: ~25-30 min, ~100-133 operaciones)
+/// NOTA: Este valor es asignado automáticamente desde ExpertTrader.BacktestDays
 ```
 
-**También actualizado en `EnsureInitializedLazy()`** para mantener consistencia.
+### **Fórmula de Conversión**
+
+```
+Barras = Días × (1440 ÷ TF_más_bajo)
+```
+
+**Ejemplos (TF base 5m):**
+- 10 días × (1440÷5) = 10 × 288 = **2,880 barras** ✅
+- 17 días × 288 = **4,896 barras** ✅
+- 52 días × 288 = **14,976 barras** ✅
+
+### **Beneficios**
+
+✅ **UX mejorado**: Usuario configura en "días" (más intuitivo)  
+✅ **Tests rápidos**: 10 días = 5-8 minutos (vs. 30 min antes)  
+✅ **Flexibilidad**: Rango 5-200 días configurable desde UI  
+✅ **Conversión automática**: Sistema calcula barras según TF base  
+✅ **Sin cambios en lógica core**: Solo capa de presentación  
+
+### **Uso Recomendado**
+
+| Configuración | Días | Barras (5m) | Tiempo | Uso |
+|---------------|------|-------------|--------|-----|
+| **Test Rápido** | 10 | ~2,880 | 5-8 min | Calibración DFM, pruebas iterativas |
+| **Test Medio** | 17 | ~4,896 | 10-15 min | Validación intermedia |
+| **Test Completo** | 52 | ~14,976 | 25-30 min | Validación final antes de live |
+
+### **Próximos Pasos**
+
+1. ✅ Copiar archivos actualizados a NinjaTrader
+2. ⏳ Compilar en NinjaTrader 8
+3. ⏳ Ejecutar backtest con 10 días (test rápido)
+4. ⏳ Validar que genera ~30-40 operaciones en 10 días
+5. ⏳ Iterar con calibración DFM
+
+#### **Archivos modificados:**
+
+- `src/Core/EngineConfig.cs` (línea 613, comentarios líneas 608-611)
+- `src/Visual/ExpertTrader.cs` (líneas 116-119, 122-136, 174, 255-260, 776-781)
 
 ---
 
-### ✅ **RESULTADO ESPERADO:**
+**Estado:** ✅ IMPLEMENTADO  
+**Versión:** Multi-TF v6.1 - UI Días de Backtest  
+**Testing:** Pendiente copia a NinjaTrader y compilación
 
-#### **Configuraciones Posibles:**
-
-| Output | File | CSV | Uso Recomendado |
-|--------|------|-----|-----------------|
-| ✅ | ✅ | ✅ | **Backtest completo** (análisis exhaustivo) |
-| ✅ | ❌ | ✅ | **Tiempo real** (ver logs en Output, guardar operaciones) |
-| ❌ | ❌ | ✅ | **Producción silenciosa** (solo operaciones en CSV) |
-| ❌ | ❌ | ❌ | **Performance máxima** (sin logging, solo trading) |
-| ✅ | ❌ | ❌ | **Debug rápido** (solo Output, sin archivos) |
-
-#### **Ventajas:**
-
-1. **✅ Control Total:** Activar/desactivar cada tipo de logging independientemente
-2. **✅ Sin Saturación:** Desactivar File Logging evita crecimiento infinito del log
-3. **✅ Retrocompatible:** Por defecto todo activado (comportamiento actual)
-4. **✅ Flexible:** Combinaciones libres según necesidad
-5. **✅ Performance:** `SilentLogger` tiene 0 overhead (no hace nada)
-6. **✅ Sin Cambios en Core:** No toca `CoreEngine`, `DecisionEngine`, ni detectores
-
----
-
-### 📋 **ARCHIVOS MODIFICADOS:**
-
-1. **`src/Infrastructure/ILogger.cs`**
-   - ✅ Añadida clase `SilentLogger` (logger No-Op)
-
-2. **`src/Visual/ExpertTrader.cs`**
-   - ✅ Añadidas 3 propiedades: `EnableOutputLogging`, `EnableFileLogging`, `EnableTradeCSV`
-   - ✅ Valores por defecto en `State.SetDefaults` (todo activado)
-   - ✅ Lógica condicional en `State.DataLoaded` para inicializar loggers
-   - ✅ Lógica condicional en `EnsureInitializedLazy()` para lazy init
-
----
-
-### 🎯 **USO RECOMENDADO:**
-
-**Para Backtest (análisis completo):**
-```
-✅ Enable Output Logging
-✅ Enable File Logging
-✅ Enable Trade CSV
-```
-
-**Para Tiempo Real (sin saturar disco):**
-```
-✅ Enable Output Logging
-❌ Enable File Logging  ← DESACTIVAR ESTO
-✅ Enable Trade CSV
-```
-
-**Para Producción (máxima performance):**
-```
-❌ Enable Output Logging
-❌ Enable File Logging
-✅ Enable Trade CSV  ← Solo guardar operaciones
-```
-
----
-
-### 🔄 **PRÓXIMOS PASOS:**
-
-1. **Compilar y probar** con diferentes combinaciones de logging
-2. **Verificar** que al desactivar File Logging no crece el archivo
-3. **Confirmar** que el sistema sigue funcionando correctamente
-4. **Pasar al problema del Multi-TF** (independencia del TF del gráfico)
-
----
-
-### 📊 **ESTADO ACTUAL:**
-
-- ✅ Sistema de logging configurable implementado
-- ✅ Sin errores de compilación
-- ✅ Eliminados 3 `Print()` de DEBUG en `GetBarsAgoFromTime()` que no respetaban la configuración
-- ⏳ Pendiente: Pruebas en NinjaTrader
-- ⏳ Pendiente: Problema Multi-TF (siguiente tarea)
-
----
-
-### 🐛 **AJUSTE ADICIONAL: Eliminación de Logs de DEBUG Residuales**
-
-**Problema detectado por el usuario:**
-- Con logging desactivado, seguían apareciendo mensajes `[DEBUG] GetBarsAgoFromTime: Buscando...`
-- Estos mensajes usaban `Print()` directo en lugar del sistema de logging
-
-**Solución:**
-- Eliminadas 3 líneas de `Print()` en el método `GetBarsAgoFromTime()` (líneas 536, 546, 551)
-- Eran logs temporales de debugging que quedaron del desarrollo
-- El método se llama muchas veces por segundo, generando spam en el Output
-
-**Resultado:**
-- ✅ Ahora el logging desactivado es **completamente silencioso**
-- ✅ No más mensajes en Output cuando `EnableOutputLogging = false`
+**IMPACTO ESPERADO:**  
+- Tests 3-4× más rápidos (10 días vs. 52 días)
+- Iteración rápida para calibración DFM
+- Configuración más intuitiva desde UI

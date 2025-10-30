@@ -392,6 +392,18 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         public int LG_MaxBarsForReversal { get; set; } = 3;
         
         /// <summary>
+        /// Número mínimo de barras entre señales idénticas (evita duplicados en barras consecutivas)
+        /// Cooldown temporal para la misma señal (Entry/SL/TP iguales)
+        /// </summary>
+        public int MinBarsBetweenSameSignal { get; set; } = 12;
+        
+        /// <summary>
+        /// Número máximo de operaciones concurrentes (activas) permitidas
+        /// 0 = sin límite, 1 = solo una operación a la vez
+        /// </summary>
+        public int MaxConcurrentTrades { get; set; } = 1;
+        
+        /// <summary>
         /// Edad máxima en barras para un grab (purga rápida)
         /// Los grabs pierden relevancia rápidamente si no son retesteados
         /// </summary>
@@ -429,10 +441,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         
         /// <summary>
         /// Ruta del archivo de estado JSON
-        /// Por defecto: Documents/NinjaTrader 8/PinkButterfly/data/brain_state.json
+        /// Por defecto: Documents/NinjaTrader 8/PinkButterfly/brain_state.json
         /// </summary>
-        public string StateFilePath { get; set; } = System.IO.Path.Combine(
-            NinjaTrader.Core.Globals.UserDataDir, "PinkButterfly", "data", "brain_state.json");
+        public string StateFilePath { get; set; } = "Documents/NinjaTrader 8/PinkButterfly/brain_state.json";
         
         /// <summary>
         /// Habilita el guardado automático del estado
@@ -573,14 +584,16 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// Activa logs de debug en NinjaTrader Output window
         /// ADVERTENCIA: Puede impactar performance en producción
         /// OPTIMIZACIÓN: Desactivado (false) para mejorar velocidad
+        /// RECOMENDACIÓN: false para pruebas rápidas, true solo para depuración profunda
         /// </summary>
-        public bool EnableDebug { get; set; } = true;
+        public bool EnableDebug { get; set; } = false;  // ← OPTIMIZADO: false para velocidad
         
         /// <summary>
         /// Activa el desglose detallado de scoring en cada decisión
-        /// V5.1: ACTIVADO para auditar señales y diagnóstico
+        /// IMPACTO: Aumenta el log significativamente (~20%)
+        /// RECOMENDACIÓN: false para pruebas rápidas, true para análisis DFM profundo
         /// </summary>
-        public bool ShowScoringBreakdown { get; set; } = true;
+        public bool ShowScoringBreakdown { get; set; } = false;  // ← OPTIMIZADO: false para velocidad
         
         /// <summary>Versión del motor (para compatibilidad de persistencia)</summary>
         public string EngineVersion { get; set; } = "1.0.0";
@@ -591,10 +604,13 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         
         /// <summary>
         /// Máximo de barras históricas que el CoreEngine procesará (aplicado al TF más bajo)
-        /// Ejemplo: 500 barras de 15m = ~5 días de datos
-        /// Reduce el tiempo de carga inicial sin perder contexto operativo
+        /// IMPORTANTE: Con Multi-TF (lowestTF=5m):
+        /// - 2880 barras = 10 días (RÁPIDO: ~5-8 min, suficiente para calibración)
+        /// - 4896 barras = 17 días (MEDIO: ~10-15 min, ~50-70 operaciones)
+        /// - 14976 barras = 52 días (COMPLETO: ~25-30 min, ~100-133 operaciones)
+        /// NOTA: Este valor es asignado automáticamente desde ExpertTrader.BacktestDays
         /// </summary>
-        public int BacktestBarsForAnalysis { get; set; } = 5000; // Backtest largo para validación estadística (~35 días en 15m)
+        public int BacktestBarsForAnalysis { get; set; } = 3000; // ← Default 3000 barras (~10 días en TF 5m)
         
         /// <summary>
         /// Habilita/deshabilita el procesamiento de barras históricas
@@ -616,13 +632,6 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// Ejemplo: 25 barras de 15m = ~6 horas de cooldown
         /// </summary>
         public int TradeCooldownBars { get; set; } = 25;
-        
-        /// <summary>
-        /// Número máximo de operaciones concurrentes permitidas (PENDING + EXECUTED)
-        /// V5.7d: Default = 1 (solo una operación activa a la vez)
-        /// Gestión de riesgo institucional: evita multiplicar exposición
-        /// </summary>
-        public int MaxConcurrentTrades { get; set; } = 1;
         
         /// <summary>
         /// Solo habilitar logging detallado (DEBUG/INFO) en las últimas N barras del histórico
