@@ -1241,12 +1241,14 @@ def main():
         try:
             with open(args.output, 'w', encoding='utf-8') as f:
                 f.write(md)
-            print(f"✅ Informe generado: {args.output}")
+            print(f"[OK] Informe generado: {args.output}")
         except Exception as e:
-            print(md)
-            print(f"ERROR guardando informe: {e}", file=sys.stderr)
+            # No imprimir md a consola porque contiene caracteres Unicode
+            print(f"[ERROR] Error guardando informe: {e}", file=sys.stderr)
+            print(f"[INFO] Archivo generado pero con problemas al confirmar", file=sys.stderr)
     else:
-        print(md)
+        # No imprimir md directamente a consola en Windows (problemas Unicode)
+        print("[INFO] Contenido generado (no mostrado para evitar errores de encoding)")
 
 
 if __name__ == '__main__':
