@@ -79,6 +79,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         private int _startAbsIndexDecision;
         // Barrera de decisión: llevar control del último índice procesado por TF
         private Dictionary<int, int> _lastProcessedIndexPerTF;
+        // Evitar múltiples decisiones en la misma barra del TF de decisión
+        private int _lastProcessedBarOfDecision = -1;
 
         // [DIAG] Acumuladores de rendimiento (solo TF de decisión)
         private int _diagBarCounter;
@@ -520,6 +522,14 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     }
                 }
 
+                // 4.5 DIBUJAR SIEMPRE si es el TF primario del gráfico (antes de gates)
+                // Esto asegura que el gráfico se actualice independientemente del TF usado (15m, 60m, 1día, etc)
+                if (BarsInProgress == 0 && barsInProgressIndex != _decisionTFIndex)
+                {
+                    DrawVisualization();
+                    // No hacer return aquí - continuar con gates para evitar procesamiento innecesario
+                }
+
                 // 5. Gate de ventana [skip..end] precomputada
                 if (!_startAnchored || _barsToSkipPerTF == null || _barsEndPerTF == null)
                     return;
@@ -530,14 +540,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
                 // 6. A partir de aquí, solo el TF de decisión orquesta el pipeline (barrera)
                 if (barsInProgressIndex != _decisionTFIndex)
-                {
-                    // Permitir dibujo en el TF del GRÁFICO (BarsInProgress==0) aunque no sea el TF de decisión
-                    if (BarsInProgress == 0)
-                    {
-                        DrawVisualization();
-                    }
                     return;
-                }
 
                 // 7. Catch-up por TF hasta el analysisTime de la barra de decisión actual
                 int decisionTF = _config.DecisionTimeframeMinutes;
@@ -578,6 +581,13 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 // 9. Generar decisión solo cuando se actualiza el TF de decisión
                 if (_decisionTFIndex >= 0 && barsInProgressIndex == _decisionTFIndex)
                 {
+                    // Guard: una sola decisión por barra del TF de decisión
+                    if (barIndex == _lastProcessedBarOfDecision)
+                    {
+                        return;
+                    }
+                    _lastProcessedBarOfDecision = barIndex;
+
                     // Asegurar inicialización perezosa si algún componente es nulo (protege contra carreras del ciclo de vida)
                     EnsureInitializedLazy();
 

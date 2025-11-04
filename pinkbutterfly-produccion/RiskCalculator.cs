@@ -843,49 +843,58 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             }
 
             // 3. PRIORIDAD 3: Buscar Swing High opuesto
-            _logger.Debug("[RiskCalculator] [P3] Buscando Swing High encima de la zona...");
-            var swingTarget = FindSwingHigh_Above(zone, coreEngine, barData);
-            if (swingTarget != null)
+            _logger.Debug("[RiskCalculator] [P3] Buscando Swing High encima de la zona (política RR>=Min y DistATR>=12, TF>=60 preferido)...");
+            // Recopilar swings candidatos (encima) en todos los TFs
+            var swingCandidatesBuy = new List<Tuple<SwingInfo,int,double,double>>(); // swing, tf, distATR, rr
+            foreach (var tf in _config.TimeframesToUse)
             {
-                double tp = swingTarget.High;
-                double potentialRR = (tp - entry) / riskDistance;
-                
-                // FILTRO CRÍTICO: Rechazar TPs con R:R absurdo (> 10)
-                // Si R:R es razonable (< 10), aceptar el TP sin importar la distancia
-                // Solo aplicar filtro de distancia si R:R es muy alto
-                double maxTPDistance = 50.0 * atr; // Máximo 50 × ATR de distancia (más realista para ES)
-                double tpDistance = tp - entry;
-                
-                // Aceptar si: TP válido Y (R:R razonable O distancia aceptable)
-                bool validRR = potentialRR <= 10.0;
-                bool validDistance = tpDistance <= maxTPDistance;
-                
-                if (tp > entry && (validRR || validDistance))
+                var swings = coreEngine.GetAllStructures(tf)
+                    .OfType<SwingInfo>()
+                    .Where(s => s.IsActive && s.IsHigh && s.High > zone.High)
+                    .ToList();
+                foreach (var sw in swings)
                 {
-                    // CRÍTICO: Calcular edad en barras del TF de la estructura, no del gráfico
-                    int idxStructSel = barData.GetBarIndexFromTime(swingTarget.TF, analysisTimeTP);
-                    int ageSelected = idxStructSel >= 0 ? (idxStructSel - swingTarget.CreatedAtBarIndex) : int.MaxValue;
-                    double distATRSelected = Math.Abs(tp - entry) / atr;
-                    string reason = validRR && validDistance ? "R:R y Distancia OK" 
-                        : validRR ? "R:R OK (Distancia ignorada)" 
-                        : "Distancia OK (R:R ignorado)";
-                    _logger.Info(string.Format("[RiskCalculator] ✓ [P3] TP SELECCIONADO: Swing High @ {0:F2}, R:R={1:F2} ({2})",
-                        tp, potentialRR, reason));
-                    _logger.Info(string.Format("[DIAGNOSTICO][Risk] TP_SELECTED: Zone={0} Priority=P3 Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} RR={6:F2} Reason={7}",
-                        zone.Id, swingTarget.Score, swingTarget.TF, distATRSelected, ageSelected, tp, potentialRR, reason.Replace(" ", "_")));
-                    zone.Metadata["TP_Structural"] = true;
-                    zone.Metadata["TP_TargetTF"] = swingTarget.TF;
-                    return tp;
+                    double tpCand = sw.High;
+                    double distATR = Math.Abs(tpCand - entry) / atr;
+                    double rrCand = riskDistance > 0 ? (tpCand - entry) / riskDistance : 0.0;
+                    swingCandidatesBuy.Add(Tuple.Create(sw, tf, distATR, rrCand));
                 }
-                else
-                {
-                    _logger.Warning(string.Format("[RiskCalculator] [P3] Swing High encontrado @ {0:F2} pero RECHAZADO: R:R={1:F2} (max 10.0) Y Distancia={2:F2} (max {3:F2}) - AMBOS FALLAN",
-                        tp, potentialRR, tpDistance, maxTPDistance));
-                }
+            }
+            // Fase A: preferir TF>=60 cumpliendo RR y distancia
+            var primaryTPBuy = swingCandidatesBuy
+                .Where(c => c.Item2 >= 60 && c.Item4 >= _config.MinRiskRewardRatio && c.Item3 >= 12.0)
+                .OrderByDescending(c => c.Item2) // TF alto primero
+                .ThenBy(c => c.Item3)           // más cerca dentro de lo admisible
+                .FirstOrDefault();
+            var chosenTPBuy = primaryTPBuy;
+            string tpReason = "SwingP3_TF>=60_RR>=Min_Dist>=12";
+            if (chosenTPBuy == null)
+            {
+                // Fase B: aceptar TF bajos si cumplen RR y distancia (penalizando TF<60)
+                chosenTPBuy = swingCandidatesBuy
+                    .Where(c => c.Item4 >= _config.MinRiskRewardRatio && c.Item3 >= 12.0)
+                    .OrderByDescending(c => c.Item2 >= 60 ? 1 : 0) // pseudo-penalización
+                    .ThenBy(c => c.Item3)
+                    .FirstOrDefault();
+                tpReason = "SwingP3_ANYTF_RR>=Min_Dist>=12";
+            }
+            if (chosenTPBuy != null)
+            {
+                var sw = chosenTPBuy.Item1; int tfSel = chosenTPBuy.Item2; double distATRSelected = chosenTPBuy.Item3; double rrSelected = chosenTPBuy.Item4;
+                double tp = sw.High;
+                int idxStructSel = barData.GetBarIndexFromTime(tfSel, analysisTimeTP);
+                int ageSelected = idxStructSel >= 0 ? (idxStructSel - sw.CreatedAtBarIndex) : int.MaxValue;
+                _logger.Info(string.Format("[RISK][TP_POLICY] Zone={0} Selected: TF={1} DistATR={2:F2} RR={3:F2} Price={4:F2} Reason={5}",
+                    zone.Id, tfSel, distATRSelected, rrSelected, tp, tpReason));
+                _logger.Info(string.Format("[DIAGNOSTICO][Risk] TP_SELECTED: Zone={0} Priority=P3 Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} RR={6:F2} Reason={7}",
+                    zone.Id, sw.Score, tfSel, distATRSelected, ageSelected, tp, rrSelected, tpReason));
+                zone.Metadata["TP_Structural"] = true;
+                zone.Metadata["TP_TargetTF"] = tfSel;
+                return tp;
             }
             else
             {
-                _logger.Debug("[RiskCalculator] [P3] No se encontró Swing High encima");
+                _logger.Debug("[RiskCalculator] [P3] No hay swings que cumplan RR>=Min y DistATR>=12");
             }
 
             // 4. FALLBACK: R:R mínimo
@@ -1047,49 +1056,55 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             }
 
             // 3. PRIORIDAD 3: Buscar Swing Low opuesto
-            _logger.Debug("[RiskCalculator] [P3] Buscando Swing Low debajo de la zona...");
-            var swingTarget = FindSwingLow_Below(zone, coreEngine, barData);
-            if (swingTarget != null)
+            _logger.Debug("[RiskCalculator] [P3] Buscando Swing Low debajo de la zona (política RR>=Min y DistATR>=12, TF>=60 preferido)...");
+            var swingCandidatesSell = new List<Tuple<SwingInfo,int,double,double>>();
+            foreach (var tf in _config.TimeframesToUse)
             {
-                double tp = swingTarget.Low;
-                double potentialRR = (entry - tp) / riskDistance;
-                
-                // FILTRO CRÍTICO: Rechazar TPs con R:R absurdo (> 10)
-                // Si R:R es razonable (< 10), aceptar el TP sin importar la distancia
-                // Solo aplicar filtro de distancia si R:R es muy alto
-                double maxTPDistance = 50.0 * atr; // Máximo 50 × ATR de distancia (más realista para ES)
-                double tpDistance = entry - tp;
-                
-                // Aceptar si: TP válido Y (R:R razonable O distancia aceptable)
-                bool validRR = potentialRR <= 10.0;
-                bool validDistance = tpDistance <= maxTPDistance;
-                
-                if (tp < entry && (validRR || validDistance))
+                var swings = coreEngine.GetAllStructures(tf)
+                    .OfType<SwingInfo>()
+                    .Where(s => s.IsActive && !s.IsHigh && s.Low < zone.Low)
+                    .ToList();
+                foreach (var sw in swings)
                 {
-                    // CRÍTICO: Calcular edad en barras del TF de la estructura, no del gráfico
-                    int idxStructSel = barData.GetBarIndexFromTime(swingTarget.TF, analysisTimeTP);
-                    int ageSelected = idxStructSel >= 0 ? (idxStructSel - swingTarget.CreatedAtBarIndex) : int.MaxValue;
-                    double distATRSelected = Math.Abs(entry - tp) / atr;
-                    string reason = validRR && validDistance ? "R:R y Distancia OK" 
-                        : validRR ? "R:R OK (Distancia ignorada)" 
-                        : "Distancia OK (R:R ignorado)";
-                    _logger.Info(string.Format("[RiskCalculator] ✓ [P3] TP SELECCIONADO: Swing Low @ {0:F2}, R:R={1:F2} ({2})",
-                        tp, potentialRR, reason));
-                    _logger.Info(string.Format("[DIAGNOSTICO][Risk] TP_SELECTED: Zone={0} Priority=P3 Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} RR={6:F2} Reason={7}",
-                        zone.Id, swingTarget.Score, swingTarget.TF, distATRSelected, ageSelected, tp, potentialRR, reason.Replace(" ", "_")));
-                    zone.Metadata["TP_Structural"] = true;
-                    zone.Metadata["TP_TargetTF"] = swingTarget.TF;
-                    return tp;
+                    double tpCand = sw.Low;
+                    double distATR = Math.Abs(entry - tpCand) / atr;
+                    double rrCand = riskDistance > 0 ? (entry - tpCand) / riskDistance : 0.0;
+                    swingCandidatesSell.Add(Tuple.Create(sw, tf, distATR, rrCand));
                 }
-                else
-                {
-                    _logger.Warning(string.Format("[RiskCalculator] [P3] Swing Low encontrado @ {0:F2} pero RECHAZADO: R:R={1:F2} (max 10.0) Y Distancia={2:F2} (max {3:F2}) - AMBOS FALLAN",
-                        tp, potentialRR, tpDistance, maxTPDistance));
-                }
+            }
+            var primaryTPSell = swingCandidatesSell
+                .Where(c => c.Item2 >= 60 && c.Item4 >= _config.MinRiskRewardRatio && c.Item3 >= 12.0)
+                .OrderByDescending(c => c.Item2)
+                .ThenBy(c => c.Item3)
+                .FirstOrDefault();
+            var chosenTPSell = primaryTPSell;
+            string tpReasonSell = "SwingP3_TF>=60_RR>=Min_Dist>=12";
+            if (chosenTPSell == null)
+            {
+                chosenTPSell = swingCandidatesSell
+                    .Where(c => c.Item4 >= _config.MinRiskRewardRatio && c.Item3 >= 12.0)
+                    .OrderByDescending(c => c.Item2 >= 60 ? 1 : 0)
+                    .ThenBy(c => c.Item3)
+                    .FirstOrDefault();
+                tpReasonSell = "SwingP3_ANYTF_RR>=Min_Dist>=12";
+            }
+            if (chosenTPSell != null)
+            {
+                var sw = chosenTPSell.Item1; int tfSel = chosenTPSell.Item2; double distATRSelected = chosenTPSell.Item3; double rrSelected = chosenTPSell.Item4;
+                double tp = sw.Low;
+                int idxStructSel = barData.GetBarIndexFromTime(tfSel, analysisTimeTP);
+                int ageSelected = idxStructSel >= 0 ? (idxStructSel - sw.CreatedAtBarIndex) : int.MaxValue;
+                _logger.Info(string.Format("[RISK][TP_POLICY] Zone={0} Selected: TF={1} DistATR={2:F2} RR={3:F2} Price={4:F2} Reason={5}",
+                    zone.Id, tfSel, distATRSelected, rrSelected, tp, tpReasonSell));
+                _logger.Info(string.Format("[DIAGNOSTICO][Risk] TP_SELECTED: Zone={0} Priority=P3 Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} RR={6:F2} Reason={7}",
+                    zone.Id, sw.Score, tfSel, distATRSelected, ageSelected, tp, rrSelected, tpReasonSell));
+                zone.Metadata["TP_Structural"] = true;
+                zone.Metadata["TP_TargetTF"] = tfSel;
+                return tp;
             }
             else
             {
-                _logger.Debug("[RiskCalculator] [P3] No se encontró Swing Low debajo");
+                _logger.Debug("[RiskCalculator] [P3] No hay swings que cumplan RR>=Min y DistATR>=12");
             }
 
             // 4. FALLBACK: R:R mínimo
@@ -1195,12 +1210,17 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                                    .ToList();
             if (inBand.Count > 0)
             {
-                var best = inBand.First();
+                var best = inBand
+                    .Select(c => new { C = c, Penalty = (c.Item2 == 240 ? 0.8 : 1.0) })
+                    .OrderByDescending(x => x.Penalty)
+                    .ThenBy(x => Math.Abs(x.C.Item3 - target))
+                    .ThenByDescending(x => x.C.Item3)
+                    .First().C;
                 int idxBest = barData.GetBarIndexFromTime(best.Item2, _currentAnalysisTime);
                 int ageSelected = idxBest >= 0 ? (idxBest - best.Item1.CreatedAtBarIndex) : int.MaxValue;
                 _logger.Info(string.Format("[DIAGNOSTICO][Risk] SLPick BUY: Zone={0} SwingTF={1} SLDistATR={2:F2} Target={3:F1} Banda=[{4:F0},{5:F0}]",
                     zone.Id, best.Item2, best.Item3, target, bandMin, bandMax));
-                _logger.Info(string.Format("[DIAGNOSTICO][Risk] SL_SELECTED: Zone={0} Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} Reason=InBand[{6:F0},{7:F0}]",
+                _logger.Info(string.Format("[DIAGNOSTICO][Risk] SL_SELECTED: Zone={0} Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} Reason=InBand[{6:F0},{7:F0}]_TFPreference",
                     zone.Id, best.Item1.Score, best.Item2, best.Item3, ageSelected, best.Item1.Low, bandMin, bandMax));
                 return Tuple.Create(best.Item1, best.Item2);
             }
@@ -1306,13 +1326,17 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                                    .ToList();
             if (inBand.Count > 0)
             {
-                var best = inBand.First();
-                // CRÍTICO: Calcular edad en barras del TF de la estructura, no del gráfico
+                var best = inBand
+                    .Select(c => new { C = c, Penalty = (c.Item2 == 240 ? 0.8 : 1.0) })
+                    .OrderByDescending(x => x.Penalty)
+                    .ThenBy(x => Math.Abs(x.C.Item3 - target))
+                    .ThenByDescending(x => x.C.Item3)
+                    .First().C;
                 int idxBest2 = barData.GetBarIndexFromTime(best.Item2, _currentAnalysisTime);
                 int ageSelected = idxBest2 >= 0 ? (idxBest2 - best.Item1.CreatedAtBarIndex) : int.MaxValue;
                 _logger.Info(string.Format("[DIAGNOSTICO][Risk] SLPick SELL: Zone={0} SwingTF={1} SLDistATR={2:F2} Target={3:F1} Banda=[{4:F0},{5:F0}]",
                     zone.Id, best.Item2, best.Item3, target, bandMin, bandMax));
-                _logger.Info(string.Format("[DIAGNOSTICO][Risk] SL_SELECTED: Zone={0} Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} Reason=InBand[{6:F0},{7:F0}]",
+                _logger.Info(string.Format("[DIAGNOSTICO][Risk] SL_SELECTED: Zone={0} Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} Reason=InBand[{6:F0},{7:F0}]_TFPreference",
                     zone.Id, best.Item1.Score, best.Item2, best.Item3, ageSelected, best.Item1.High, bandMin, bandMax));
                 return Tuple.Create(best.Item1, best.Item2);
             }

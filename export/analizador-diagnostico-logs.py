@@ -19,6 +19,7 @@ import os
 import re
 import sys
 from datetime import datetime
+from collections import Counter, defaultdict
 
 
 def to_float(num_str: str) -> float:
@@ -126,6 +127,22 @@ def parse_log(log_path: str) -> dict:
     re_ctx_diag = re.compile(rf"\[(?:{re_diagnostic_tag})\]\[Context\]\s*Bias=(\w+)\s*Strength=([0-9\.,]+)\s*Close60>Avg200=(true|false)", re.IGNORECASE)
     re_tm_cancel = re.compile(r"\[TradeManager\].*ORDEN (CANCELADA|EXPIRADA).*Razón:?\s*(.*)")
     re_tm_cancel_diag = re.compile(rf"\[(?:{re_diagnostic_tag})\]\[TM\]\s*Cancel_BOS\s*Action=(BUY|SELL)\s*Bias=(\w+)")
+
+    # Funnel traces (TradeManager) - aceptar con o sin ':'
+    re_tm_registered = re.compile(r"\[TradeManager\].*ORDEN REGISTRADA:")
+    re_tm_dedup_cooldown = re.compile(r"\[TRADE\]\[DEDUP\]\s+COOLDOWN:?\b")
+    re_tm_dedup_ident = re.compile(r"\[TRADE\]\[DEDUP\]\s+IDENTICAL:?\b")
+    re_tm_skip_conc = re.compile(r"\[TRADE\]\[SKIP\]\s+CONCURRENCY_LIMIT:?\b")
+
+    # DEDUP detail (nuevos formatos enriquecidos)
+    re_dedup_ident_new = re.compile(
+        r"\[TRADE\]\[DEDUP\]\s+IDENTICAL\s+Zone=(\S+)\s+Action=(BUY|SELL)\s+Key=([0-9\.,\-]+/[0-9\.,\-]+/[0-9\.,\-]+)\s+DomTF=(-?\d+)\s+LastSimilar=(\S*)\s+LastBar=(-?\d+)\s+CurrentBar=(-?\d+)\s+DeltaBars=(-?\d+)\s+Tolerance=([0-9\.,]+)")
+    re_dedup_ident_old = re.compile(
+        r"\[TRADE\]\[DEDUP\]\s+IDENTICAL:?\s+Action=(BUY|SELL).*?Key=([0-9\./\.-]+).*?lastId=(\S+).*?lastBar=(-?\d+).*?deltaBars=(-?\d+).*?TF=(-?\d+).*?(?:Struct|Struct|Structure|Struct)=(\S+)")
+    re_dedup_cooldown_new = re.compile(
+        r"\[TRADE\]\[DEDUP\]\s+COOLDOWN\s+Zone=(\S+)\s+Action=(BUY|SELL)\s+Key=([0-9\.,\-]+/[0-9\.,\-]+/[0-9\.,\-]+)\s+DomTF=(-?\d+)\s+CurrentBar=(-?\d+)\s+BarsRemain=(\d+)\s+UntilBar=(\d+)")
+    re_dedup_cooldown_old = re.compile(
+        r"\[TRADE\]\[DEDUP\]\s+COOLDOWN:?\s+.*?Action=(BUY|SELL).*?Struct=(\S+).*?BarsRemain=(\d+).*?UntilBar=(\d+)")
 
     stats = {
         'dfm': {
@@ -280,6 +297,22 @@ def parse_log(log_path: str) -> dict:
             'selected': 0,
             'candidates': [],  # [{priority, type, score, tf, dist_atr, age, rr}]
             'selected_list': []  # [{priority, type, score, tf, dist_atr, age, rr, reason}]
+        },
+        'funnel': {
+            'dfm_passed': 0,
+            'registered': 0,
+            'dedup_cooldown': 0,
+            'dedup_identical': 0,
+            'skip_concurrency': 0,
+            'executed': 0,  # se rellena desde CSV
+        },
+        'dedup': {
+            'identical_by_zone': {},      # zoneId -> count
+            'identical_key_by_zone': {},  # zoneId -> Counter(keys)
+            'identical_delta_hist': Counter(),  # deltaBars -> count
+            'identical_by_action': {'BUY': 0, 'SELL': 0},
+            'identical_by_domtf': {},     # tf -> count
+            'cooldown_by_zone': {}        # zoneId -> count
         }
     }
 
@@ -293,6 +326,7 @@ def parse_log(log_path: str) -> dict:
                     stats['dfm']['bull_evals'] += int(m.group(1))
                     stats['dfm']['bear_evals'] += int(m.group(2))
                     stats['dfm']['passed'] += int(m.group(3))
+                    stats['funnel']['dfm_passed'] += int(m.group(3))
                     continue
 
                 m = re_dfm_bins.search(line)
@@ -633,6 +667,69 @@ def parse_log(log_path: str) -> dict:
                         stats['tm_cancel_diag']['by_action'][action] += 1
                     if bias in stats['tm_cancel_diag']['by_bias']:
                         stats['tm_cancel_diag']['by_bias'][bias] += 1
+                    continue
+
+                # Funnel: Registered / Dedup / Concurrency
+                if re_tm_registered.search(line):
+                    stats['funnel']['registered'] += 1
+                    continue
+                if re_tm_dedup_cooldown.search(line):
+                    stats['funnel']['dedup_cooldown'] += 1
+                    # Parse detalles si formato nuevo/u antiguo
+                    mnew = re_dedup_cooldown_new.search(line)
+                    if mnew:
+                        zone = mnew.group(1)
+                        stats['dedup']['cooldown_by_zone'][zone] = stats['dedup']['cooldown_by_zone'].get(zone, 0) + 1
+                    else:
+                        mold = re_dedup_cooldown_old.search(line)
+                        if mold:
+                            zone = mold.group(2)
+                            stats['dedup']['cooldown_by_zone'][zone] = stats['dedup']['cooldown_by_zone'].get(zone, 0) + 1
+                    continue
+                if re_tm_dedup_ident.search(line):
+                    stats['funnel']['dedup_identical'] += 1
+                    # Parse detalles para análisis
+                    mnew = re_dedup_ident_new.search(line)
+                    if mnew:
+                        zone = mnew.group(1)
+                        action = mnew.group(2)
+                        key = mnew.group(3)
+                        domtf = mnew.group(4)
+                        delta = int(mnew.group(8)) if mnew.group(8) else -1
+                        # by zone
+                        stats['dedup']['identical_by_zone'][zone] = stats['dedup']['identical_by_zone'].get(zone, 0) + 1
+                        # key by zone
+                        if zone not in stats['dedup']['identical_key_by_zone']:
+                            stats['dedup']['identical_key_by_zone'][zone] = Counter()
+                        stats['dedup']['identical_key_by_zone'][zone][key] += 1
+                        # action
+                        if action in stats['dedup']['identical_by_action']:
+                            stats['dedup']['identical_by_action'][action] += 1
+                        # domtf
+                        stats['dedup']['identical_by_domtf'][domtf] = stats['dedup']['identical_by_domtf'].get(domtf, 0) + 1
+                        # delta
+                        stats['dedup']['identical_delta_hist'][delta] += 1
+                    else:
+                        mold = re_dedup_ident_old.search(line)
+                        if mold:
+                            action = mold.group(1)
+                            key = mold.group(2)
+                            last_id = mold.group(3)
+                            last_bar = mold.group(4)
+                            delta = int(mold.group(5)) if mold.group(5) else -1
+                            domtf = mold.group(6)
+                            zone = mold.group(7)
+                            stats['dedup']['identical_by_zone'][zone] = stats['dedup']['identical_by_zone'].get(zone, 0) + 1
+                            if zone not in stats['dedup']['identical_key_by_zone']:
+                                stats['dedup']['identical_key_by_zone'][zone] = Counter()
+                            stats['dedup']['identical_key_by_zone'][zone][key] += 1
+                            if action in stats['dedup']['identical_by_action']:
+                                stats['dedup']['identical_by_action'][action] += 1
+                            stats['dedup']['identical_by_domtf'][domtf] = stats['dedup']['identical_by_domtf'].get(domtf, 0) + 1
+                            stats['dedup']['identical_delta_hist'][delta] += 1
+                    continue
+                if re_tm_skip_conc.search(line):
+                    stats['funnel']['skip_concurrency'] += 1
                     continue
 
                 # StructureFusion por zona
@@ -1089,6 +1186,86 @@ def render_markdown(log_path: str, csv_path: str, stats_log: dict, stats_csv: di
             lines.append(f"- Cancelaciones por razón: {stats_csv['cancel_reasons']}")
         if stats_csv['expire_reasons']:
             lines.append(f"- Expiraciones por razón: {stats_csv['expire_reasons']}")
+        lines.append("")
+
+    # Embudo de Señales (Funnel)
+    fun = stats_log.get('funnel', {})
+    if fun:
+        fun['executed'] = stats_csv.get('executed', 0) if stats_csv else 0
+        lines.append("## 📊 Embudo de Señales (Funnel)")
+        lines.append(f"- DFM Señales (PassedThreshold): {fun.get('dfm_passed',0)}")
+        lines.append(f"- Registered: {fun.get('registered',0)}")
+        lines.append(f"  - DEDUP_COOLDOWN: {fun.get('dedup_cooldown',0)} | DEDUP_IDENTICAL: {fun.get('dedup_identical',0)} | SKIP_CONCURRENCY: {fun.get('skip_concurrency',0)}")
+        # Ratios clave (normalizados por intentos de registro)
+        def pct(a, b):
+            b = max(1, b)
+            return (a / b) * 100.0
+        dfm_passed = fun.get('dfm_passed',0)
+        registered = fun.get('registered',0)
+        dedup_total = fun.get('dedup_cooldown',0) + fun.get('dedup_identical',0)
+        skip_conc = fun.get('skip_concurrency',0)
+        attempts = registered + dedup_total + skip_conc
+        lines.append(f"- Intentos de registro: {attempts}")
+        lines.append("")
+
+        # Análisis adicional de DEDUP (IDENTICAL/COOLDOWN)
+        ded = stats_log.get('dedup', {})
+        ident_by_zone = ded.get('identical_by_zone', {})
+        ident_keys = ded.get('identical_key_by_zone', {})
+        ident_delta = ded.get('identical_delta_hist', Counter())
+        ident_by_action = ded.get('identical_by_action', {})
+        ident_by_domtf = ded.get('identical_by_domtf', {})
+        cooldown_by_zone = ded.get('cooldown_by_zone', {})
+
+        total_ident = sum(ident_by_zone.values())
+        if total_ident > 0:
+            lines.append("### TRADE DEDUP - Zonas y Persistencia")
+            # Top 10 zonas
+            top = sorted(ident_by_zone.items(), key=lambda x: x[1], reverse=True)[:10]
+            lines.append("- Top 10 Zonas más deduplicadas (IDENTICAL):")
+            lines.append("")
+            lines.append("| ZoneID | Duplicados | % del Total | Key Típica |")
+            lines.append("|--------|------------:|------------:|-----------:|")
+            for zone, cnt in top:
+                pzone = (cnt / total_ident) * 100.0
+                key_cnt = ident_keys.get(zone, Counter())
+                top_key = key_cnt.most_common(1)[0][0] if key_cnt else ""
+                lines.append(f"| {zone} | {cnt} | {pzone:.1f}% | {top_key} |")
+            lines.append("")
+
+            # Distribución DeltaBars (incluye 0 = misma barra)
+            d0 = ident_delta.get(0, 0)
+            d1 = ident_delta.get(1, 0)
+            d2_5 = sum(v for k,v in ident_delta.items() if isinstance(k,int) and 2 <= k <= 5)
+            d6_12 = sum(v for k,v in ident_delta.items() if isinstance(k,int) and 6 <= k <= 12)
+            dgt12 = sum(v for k,v in ident_delta.items() if isinstance(k,int) and k > 12)
+            lines.append("- Distribución de DeltaBars (IDENTICAL):")
+            lines.append("")
+            lines.append("| DeltaBars | Cantidad | % |")
+            lines.append("|-----------|---------:|---:|")
+            def ppct(x):
+                return f"{(x/max(1,total_ident))*100:.1f}%"
+            lines.append(f"| 0 | {d0} | {ppct(d0)} |")
+            lines.append(f"| 1 | {d1} | {ppct(d1)} |")
+            lines.append(f"| 2-5 | {d2_5} | {ppct(d2_5)} |")
+            lines.append(f"| 6-12 | {d6_12} | {ppct(d6_12)} |")
+            lines.append(f"| >12 | {dgt12} | {ppct(dgt12)} |")
+            lines.append("")
+
+            # Breakdown opcional por Acción y DomTF
+            if ident_by_action:
+                lines.append(f"- IDENTICAL por Acción: {ident_by_action}")
+            if ident_by_domtf:
+                lines.append(f"- IDENTICAL por DomTF: {ident_by_domtf}")
+            if cooldown_by_zone:
+                lines.append(f"- COOLDOWN por Zona (top 5): {dict(sorted(cooldown_by_zone.items(), key=lambda x: x[1], reverse=True)[:5])}")
+            lines.append("")
+        lines.append("### Ratios del Funnel")
+        lines.append(f"- Coverage = Intentos / PassedThreshold = {pct(attempts, dfm_passed):.1f}%")
+        lines.append(f"- RegRate = Registered / Intentos = {pct(registered, attempts):.1f}%")
+        lines.append(f"- Dedup Rate = (COOLDOWN+IDENTICAL) / Intentos = {pct(dedup_total, attempts):.1f}%")
+        lines.append(f"- Concurrency = SKIP_CONCURRENCY / Intentos = {pct(skip_conc, attempts):.1f}%")
+        lines.append(f"- ExecRate = Ejecutadas / Registered = {pct(fun.get('executed',0), max(registered,1)):.1f}%")
         lines.append("")
 
     # SL/TP Analysis Post-Mortem

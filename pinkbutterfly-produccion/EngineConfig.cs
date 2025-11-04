@@ -701,6 +701,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         public int TradeCooldownBars { get; set; } = 25;
         
         /// <summary>
+        /// Barras mínimas entre señales idénticas (Entry/SL/TP iguales) para permitir reintento.
+        /// Evita re-registros en barras consecutivas de la misma zona/señal.
+        /// </summary>
+        public int MinBarsBetweenSameSignal { get; set; } = 12;
+        
+        /// <summary>
         /// Número máximo de operaciones concurrentes permitidas (PENDING + EXECUTED)
         /// V5.7d: Default = 1 (solo una operación activa a la vez)
         /// Gestión de riesgo institucional: evita multiplicar exposición

@@ -88,7 +88,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 if (entryBar < barExpiration)
                 {
                     int barsRemaining = barExpiration - entryBar;
-                    _logger.Debug($"[TradeManager] ⏳ Orden en COOLDOWN: {action} @ {entry:F2} | Estructura={sourceStructureId} | Barras restantes: {barsRemaining}");
+                    _logger.Info($"[TRADE][DEDUP] COOLDOWN Zone={sourceStructureId} Action={action} Key={entry:F2}/{sl:F2}/{tp:F2} DomTF={tfDominante} CurrentBar={entryBar} BarsRemain={barsRemaining} UntilBar={barExpiration}");
                     return;
                 }
                 else
@@ -100,18 +100,32 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             }
             
             // FILTRO 2: Verificar si ya existe una orden idéntica activa
-            bool hasIdentical = _trades.Any(t =>
+            var identicalCandidates = _trades.Where(t =>
                 (t.Status == TradeStatus.PENDING || t.Status == TradeStatus.EXECUTED) &&
                 t.Action == action &&
                 Math.Abs(t.Entry - entry) < 0.5 &&
                 Math.Abs(t.SL - sl) < 0.5 &&
                 Math.Abs(t.TP - tp) < 0.5
             );
+            bool hasIdentical = identicalCandidates.Any();
 
             if (hasIdentical)
             {
-                _logger.Debug($"[TradeManager] ⚠ Orden duplicada rechazada: {action} @ {entry:F2}");
-                return;
+                var lastSimilar = identicalCandidates.OrderByDescending(t => t.EntryBar).FirstOrDefault();
+                int lastBar = lastSimilar != null ? lastSimilar.EntryBar : -1;
+                int deltaBars = lastSimilar != null ? (entryBar - lastBar) : -1;
+                string lastId = lastSimilar != null ? lastSimilar.Id : "";
+                double keyE = Math.Round(entry, 2);
+                double keyS = Math.Round(sl, 2);
+                double keyT = Math.Round(tp, 2);
+
+                int minBars = Math.Max(0, _config.MinBarsBetweenSameSignal);
+                if (deltaBars >= 0 && deltaBars < minBars)
+                {
+                    _logger.Info($"[TRADE][DEDUP] IDENTICAL Zone={sourceStructureId} Action={action} Key={keyE:F2}/{keyS:F2}/{keyT:F2} DomTF={tfDominante} LastSimilar={lastId} LastBar={lastBar} CurrentBar={entryBar} DeltaBars={deltaBars} Tolerance=0.50");
+                    return;
+                }
+                // Si ha pasado el cooldown, permitimos re-registrar sin return
             }
             
             // FILTRO 3: Verificar límite de operaciones concurrentes (V5.7d)
@@ -121,7 +135,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             
             if (activeCount >= _config.MaxConcurrentTrades)
             {
-                _logger.Debug($"[TradeManager] ⚠ Orden rechazada por límite de concurrencia: {action} @ {entry:F2} | Activas: {activeCount}/{_config.MaxConcurrentTrades}");
+                _logger.Info($"[TRADE][SKIP] CONCURRENCY_LIMIT: Action={action} Entry={entry:F2} SL={sl:F2} TP={tp:F2} Active={activeCount}/{_config.MaxConcurrentTrades}");
                 return;
             }
 
