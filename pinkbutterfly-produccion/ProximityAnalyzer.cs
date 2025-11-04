@@ -43,18 +43,21 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             if (coreEngine == null)
                 throw new ArgumentNullException(nameof(coreEngine));
 
-            _logger.Debug("[ProximityAnalyzer] Analizando proximidad de HeatZones...");
+            if (_config.EnablePerfDiagnostics && _config.EnableDebug)
+                _logger.Debug("[ProximityAnalyzer] Analizando proximidad de HeatZones...");
 
             if (snapshot.HeatZones == null || snapshot.HeatZones.Count == 0)
             {
-                _logger.Debug("[ProximityAnalyzer] No hay HeatZones para analizar");
+                if (_config.EnablePerfDiagnostics && _config.EnableDebug)
+                    _logger.Debug("[ProximityAnalyzer] No hay HeatZones para analizar");
                 return;
             }
 
             double currentPrice = snapshot.Summary.CurrentPrice;
 
-            _logger.Debug(string.Format("[ProximityAnalyzer] Precio actual: {0:F2}, HeatZones: {1}",
-                currentPrice, snapshot.HeatZones.Count));
+            if (_config.EnablePerfDiagnostics && _config.EnableDebug)
+                _logger.Debug(string.Format("[ProximityAnalyzer] Precio actual: {0:F2}, HeatZones: {1}",
+                    currentPrice, snapshot.HeatZones.Count));
 
             // Procesar cada HeatZone
             var processedZones = new List<HeatZone>();
@@ -78,8 +81,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             if (proximityFactor > 0.0)
                 {
                     processedZones.Add(zone);
-                    _logger.Debug(string.Format("[ProximityAnalyzer] HeatZone {0}: Proximity={1:F2}, Distance={2:F2} ATR, Aligned={3}",
-                        zone.Id, proximityFactor, zone.Metadata["DistanceATR"], isAligned));
+                    if (_config.EnablePerfDiagnostics && _config.EnableDebug)
+                        _logger.Debug(string.Format("[ProximityAnalyzer] HeatZone {0}: Proximity={1:F2}, Distance={2:F2} ATR, Aligned={3}",
+                            zone.Id, proximityFactor, zone.Metadata["DistanceATR"], isAligned));
                     if (isAligned)
                     {
                         keptAligned++;
@@ -95,7 +99,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 }
                 else
                 {
-                    _logger.Debug(string.Format("[ProximityAnalyzer] HeatZone {0} filtrada (demasiado lejos). Aligned={1}", zone.Id, isAligned));
+                    if (_config.EnablePerfDiagnostics && _config.EnableDebug)
+                        _logger.Debug(string.Format("[ProximityAnalyzer] HeatZone {0} filtrada (demasiado lejos). Aligned={1}", zone.Id, isAligned));
                     if (isAligned) filteredAligned++; else filteredCounter++;
                 }
             }
@@ -133,8 +138,20 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
             snapshot.HeatZones = processedZones;
 
-            _logger.Debug(string.Format("[ProximityAnalyzer] Análisis completado: {0}/{1} HeatZones relevantes",
-                processedZones.Count, snapshot.HeatZones.Count));
+            if (_config.EnablePerfDiagnostics && _config.EnableDebug)
+                _logger.Debug(string.Format("[ProximityAnalyzer] Análisis completado: {0}/{1} HeatZones relevantes",
+                    processedZones.Count, snapshot.HeatZones.Count));
+
+            // Resumen agregado del pipeline de Proximity cada N barras del TF de decisión
+            if (timeframeMinutes == _config.DecisionTimeframeMinutes)
+            {
+                int interval = Math.Max(1, _config.DiagnosticsInterval);
+                if ((currentBar % interval) == 0)
+                {
+                    _logger.Info(string.Format("[PIPE][PROX2] TF={0} Bar={1} ZonesIn={2} ZonesKept={3} KeptAligned={4} KeptCounter={5}",
+                        timeframeMinutes, currentBar, snapshot.HeatZones.Count, processedZones.Count, keptAligned, keptCounter));
+                }
+            }
 
             // Resumen diagnóstico
             int totalAligned = keptAligned + filteredAligned;
@@ -214,8 +231,29 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             // Distancia al Entry estructural
             double distance = Math.Abs(currentPrice - entryPrice);
 
-            // 2. Obtener ATR del TF Dominante de la zona
-            double atr = barData.GetATR(zone.TFDominante, currentBar, 14);
+            // 2. Obtener ATR del TF Dominante de la zona, alineado por tiempo del TF de decisión
+            int decisionTF = _config.DecisionTimeframeMinutes;
+            DateTime analysisTime = barData.GetBarTime(decisionTF, currentBar);
+            int idxDom = barData.GetBarIndexFromTime(zone.TFDominante, analysisTime);
+            if (idxDom < 0)
+            {
+                // Sin datos alineados: marcar zona sin proximidad en este ciclo
+                zone.Metadata["Distance"] = Math.Abs(currentPrice - entryPrice);
+                zone.Metadata["DistanceATR"] = double.MaxValue;
+                zone.Metadata["ProximityFactor"] = 0.0;
+                zone.Metadata["BaseProx"] = 0.0;
+                zone.Metadata["ZoneHeightATR"] = 0.0;
+                zone.Metadata["SizePenalty"] = 0.0;
+                zone.Metadata["ProximityScore"] = 0.0;
+                zone.Metadata["DistanceTicks"] = 0.0;
+                zone.Metadata["IsInside"] = false;
+                zone.Metadata["CurrentPrice"] = currentPrice;
+                zone.Metadata["AlignedWithBias"] = isAlignedWithBias;
+                zone.Metadata["ProximityThresholdEff_ATR"] = _config.ProximityThresholdATR;
+                _logger.Info($"[CTX_NO_DATA] Proximity: TF={zone.TFDominante} sin índice para time={analysisTime:yyyy-MM-dd HH:mm}. Zona {zone.Id} => Proximity=0");
+                return;
+            }
+            double atr = barData.GetATR(zone.TFDominante, 14, idxDom);
 
             // Evitar división por cero
             if (atr <= 0)
@@ -300,10 +338,11 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             }
             
             // Logging detallado para depuración
-            _logger.Debug(string.Format(
-                "[ProximityAnalyzer] HeatZone {0}: Entry={1:F2}, Price={2:F2}, Dist={3:F2} ({4:F2} ATR), ThrEff={5:F2} ATR, BaseProx={6:F4}, ZoneATR={7:F2}, SizePenalty={8:F4}, FinalProx={9:F4}, Aligned={10}",
-                zone.Id, entryPrice, currentPrice, distance, distanceATR, thresholdEff, baseProximityFactor,
-                zoneHeightATR, sizePenalty, proximityFactor, isAlignedWithBias));
+            if (_config.EnablePerfDiagnostics && _config.EnableDebug)
+                _logger.Debug(string.Format(
+                    "[ProximityAnalyzer] HeatZone {0}: Entry={1:F2}, Price={2:F2}, Dist={3:F2} ({4:F2} ATR), ThrEff={5:F2} ATR, BaseProx={6:F4}, ZoneATR={7:F2}, SizePenalty={8:F4}, FinalProx={9:F4}, Aligned={10}",
+                    zone.Id, entryPrice, currentPrice, distance, distanceATR, thresholdEff, baseProximityFactor,
+                    zoneHeightATR, sizePenalty, proximityFactor, isAlignedWithBias));
         }
     }
 }

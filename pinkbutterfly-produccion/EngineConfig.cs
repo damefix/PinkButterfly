@@ -40,6 +40,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// </summary>
         public List<int> TimeframesToUse { get; set; } = new List<int> { 5, 15, 60, 240, 1440 };
 
+        /// <summary>
+        /// Timeframe de decisión del DFM (en minutos). Por defecto: 15m.
+        /// Todas las lecturas multi-TF se alinean por tiempo respecto a este TF.
+        /// </summary>
+        public int DecisionTimeframeMinutes { get; set; } = 15;
+
         // ========================================================================
         // PARÁMETROS FVG (FAIR VALUE GAP)
         // ========================================================================
@@ -642,6 +648,16 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// OPTIMIZACIÓN: Desactivado (false) para mejorar velocidad
         /// </summary>
         public bool EnableDebug { get; set; } = true;
+
+        /// <summary>
+        /// [DIAG] Activa instrumentación agregada de rendimiento y pipeline (no afecta analizadores)
+        /// </summary>
+        public bool EnablePerfDiagnostics { get; set; } = true;
+
+        /// <summary>
+        /// [DIAG] Intervalo (en barras del TF de decisión) para emitir trazas agregadas
+        /// </summary>
+        public int DiagnosticsInterval { get; set; } = 100;
         
         /// <summary>
         /// Activa el desglose detallado de scoring en cada decisión

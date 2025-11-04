@@ -130,7 +130,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 {
                     try
                     {
-                        int idx = barData.GetCurrentBarIndex(zone.TFDominante);
+                        DateTime analysisTime = barData.GetBarTime(timeframeMinutes, currentBar);
+                        int idx = barData.GetBarIndexFromTime(zone.TFDominante, analysisTime);
                         double cur = idx >= 0 ? barData.GetClose(zone.TFDominante, idx) : 0.0;
                         double atr = idx >= 0 ? barData.GetATR(zone.TFDominante, 14, idx) : 0.0;
                         double distPts = cur > 0 ? Math.Abs(zone.CenterPrice - cur) : 0.0;
@@ -149,7 +150,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 {
                     try
                     {
-                        int idx = barData.GetCurrentBarIndex(zone.TFDominante);
+                        DateTime analysisTime = barData.GetBarTime(timeframeMinutes, currentBar);
+                        int idx = barData.GetBarIndexFromTime(zone.TFDominante, analysisTime);
                         double cur = idx >= 0 ? barData.GetClose(zone.TFDominante, idx) : 0.0;
                         double atr = idx >= 0 ? barData.GetATR(zone.TFDominante, 14, idx) : 0.0;
                         double distPts = cur > 0 ? Math.Abs(zone.CenterPrice - cur) : 0.0;

@@ -35,6 +35,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         private EngineConfig _config;
         private ILogger _logger;
         private int _riskRejectionCounter = 0;
+        // Tiempo de análisis alineado al TF de decisión para este ciclo
+        private DateTime _currentAnalysisTime = DateTime.MinValue;
 
         public string ComponentName => "RiskCalculator";
 
@@ -60,6 +62,10 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             }
 
             _logger.Debug("[RiskCalculator] Calculando riesgo estructural para HeatZones...");
+
+            // Fijar tiempo de análisis global para este ciclo (barrera temporal)
+            int decisionTF_forRisk = _config.DecisionTimeframeMinutes;
+            _currentAnalysisTime = barData.GetBarTime(decisionTF_forRisk, currentBar);
 
             if (snapshot.HeatZones == null || snapshot.HeatZones.Count == 0)
             {
@@ -160,8 +166,20 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// </summary>
         private void CalculateStructuralRiskLevels(HeatZone zone, IBarDataProvider barData, CoreEngine coreEngine, int currentBar, double accountSize)
         {
-            // Obtener ATR del TF Dominante
-            double atr = barData.GetATR(zone.TFDominante, currentBar, 14);
+            // Alinear al tiempo de análisis: usar índice del TF dominante para ATR/Close
+            int decisionTF = _config.DecisionTimeframeMinutes;
+            DateTime analysisTime = barData.GetBarTime(decisionTF, currentBar);
+            int idxDom = barData.GetBarIndexFromTime(zone.TFDominante, analysisTime);
+            if (idxDom < 0)
+            {
+                zone.Metadata["RiskCalculated"] = false;
+                zone.Metadata["RejectReason"] = "NoDataAtAnalysisTime";
+                _logger.Info($"[DIAGNOSTICO][Risk] REJECT: NoDataAtAnalysisTime Zone={zone.Id} TF={zone.TFDominante} Time={analysisTime:yyyy-MM-dd HH:mm}");
+                return;
+            }
+
+            // Obtener ATR del TF Dominante (firma correcta)
+            double atr = barData.GetATR(zone.TFDominante, 14, idxDom);
             if (atr <= 0)
             {
                 _logger.Warning(string.Format("[RiskCalculator] ATR({0}) es 0 para HeatZone {1}, usando ATR=1.0",
@@ -173,7 +191,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             // En backtest, necesitamos ver TODAS las señales históricas para auditar el sistema
             if (!barData.IsHistorical)
             {
-                double currentPrice = barData.GetClose(zone.TFDominante, currentBar);
+                double currentPrice = barData.GetClose(zone.TFDominante, idxDom);
                 double entryStructural = zone.Direction == "Bullish" ? zone.Low : zone.High;
                 double distanceToEntry = Math.Abs(currentPrice - entryStructural);
                 double maxDistanceAllowed = _config.MaxEntryProximityFactor * atr; // Configurable (default 15.0 × ATR)
@@ -390,6 +408,18 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 
                 zone.Metadata["RiskCalculated"] = false;
                 zone.Metadata["RejectReason"] = string.Format("R:R absurdo: {0:F2} (mínimo: {1:F2})", actualRR, _config.MinRiskRewardRatio);
+                return;
+            }
+
+            // 3b. Guard adicional: rechazar FALLBACK (P4) con proximidad baja
+            // Criterio: TP no estructural (P4_Fallback) y ProximityFactor < 0.30
+            bool isFallbackTP = zone.Metadata.ContainsKey("TP_Structural") && !(bool)zone.Metadata["TP_Structural"];
+            double proximityFactor = zone.Metadata.ContainsKey("ProximityFactor") ? (double)zone.Metadata["ProximityFactor"] : 0.0;
+            if (isFallbackTP && proximityFactor < 0.30)
+            {
+                _logger.Info(string.Format("[DIAGNOSTICO][Risk] RejFallbackLowProx: Zone={0} Prox={1:F3} (<0.30)", zone.Id, proximityFactor));
+                zone.Metadata["RiskCalculated"] = false;
+                zone.Metadata["RejectReason"] = string.Format("Fallback con proximidad baja: {0:F2} (<0.30)", proximityFactor);
                 return;
             }
 
@@ -680,7 +710,10 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
             // LOG DETALLADO: Recopilar TODOS los candidatos TP para análisis post-mortem
             var allCandidates = new List<Tuple<string, string, double, int, double, double, int>>(); // (priority, type, score, tf, price, distATR, age)
-            double atr = barData.GetATR(zone.TFDominante, currentBar, 14);
+            int decisionTF_local = _config.DecisionTimeframeMinutes;
+            DateTime analysisTimeTP = barData.GetBarTime(decisionTF_local, currentBar);
+            int idxAtrDom = barData.GetBarIndexFromTime(zone.TFDominante, analysisTimeTP);
+            double atr = idxAtrDom >= 0 ? barData.GetATR(zone.TFDominante, 14, idxAtrDom) : 1.0;
 
             // Recopilar Liquidity targets
             foreach (var tf in _config.TimeframesToUse.OrderByDescending(t => t))
@@ -693,8 +726,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     double tpPrice = liq.Low;
                     double distATR = Math.Abs(tpPrice - entry) / atr;
                     double potentialRR = (tpPrice - entry) / riskDistance;
-                    int currentBarInStructureTF = barData.GetCurrentBarIndex(liq.TF);
-                    int age = currentBarInStructureTF - liq.CreatedAtBarIndex;
+                    int idxStruct = barData.GetBarIndexFromTime(liq.TF, analysisTimeTP);
+                    int age = idxStruct >= 0 ? (idxStruct - liq.CreatedAtBarIndex) : int.MaxValue;
                     allCandidates.Add(Tuple.Create("P1", liq.Type, liq.Score, liq.TF, tpPrice, distATR, age));
                 }
             }
@@ -710,8 +743,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     double tpPrice = str.Low;
                     double distATR = Math.Abs(tpPrice - entry) / atr;
                     double potentialRR = (tpPrice - entry) / riskDistance;
-                    int currentBarInStructureTF = barData.GetCurrentBarIndex(str.TF);
-                    int age = currentBarInStructureTF - str.CreatedAtBarIndex;
+                    int idxStruct = barData.GetBarIndexFromTime(str.TF, analysisTimeTP);
+                    int age = idxStruct >= 0 ? (idxStruct - str.CreatedAtBarIndex) : int.MaxValue;
                     allCandidates.Add(Tuple.Create("P2", str.Type, str.Score, str.TF, tpPrice, distATR, age));
                 }
             }
@@ -727,8 +760,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     double tpPrice = sw.High;
                     double distATR = Math.Abs(tpPrice - entry) / atr;
                     double potentialRR = (tpPrice - entry) / riskDistance;
-                    int currentBarInStructureTF = barData.GetCurrentBarIndex(sw.TF);
-                    int age = currentBarInStructureTF - sw.CreatedAtBarIndex;
+                    int idxStruct = barData.GetBarIndexFromTime(sw.TF, analysisTimeTP);
+                    int age = idxStruct >= 0 ? (idxStruct - sw.CreatedAtBarIndex) : int.MaxValue;
                     allCandidates.Add(Tuple.Create("P3", "Swing", sw.Score, sw.TF, tpPrice, distATR, age));
                 }
             }
@@ -754,8 +787,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 if (tp > entry)
                 {
                     // CRÍTICO: Calcular edad en barras del TF de la estructura, no del gráfico
-                    int currentBarInStructureTF = barData.GetCurrentBarIndex(liquidityTarget.TF);
-                    int ageSelected = currentBarInStructureTF - liquidityTarget.CreatedAtBarIndex;
+                    int idxStructSel = barData.GetBarIndexFromTime(liquidityTarget.TF, analysisTimeTP);
+                    int ageSelected = idxStructSel >= 0 ? (idxStructSel - liquidityTarget.CreatedAtBarIndex) : int.MaxValue;
                     double distATRSelected = Math.Abs(tp - entry) / atr;
                     double rrSelected = (tp - entry) / riskDistance;
                     _logger.Info(string.Format("[RiskCalculator] ✓ [P1] TP SELECCIONADO: Liquidity ({0}) @ {1:F2}, R:R={2:F2}",
@@ -786,8 +819,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 if (tp > entry)
                 {
                     // CRÍTICO: Calcular edad en barras del TF de la estructura, no del gráfico
-                    int currentBarInStructureTF = barData.GetCurrentBarIndex(structureTarget.TF);
-                    int ageSelected = currentBarInStructureTF - structureTarget.CreatedAtBarIndex;
+                    int idxStructSel = barData.GetBarIndexFromTime(structureTarget.TF, analysisTimeTP);
+                    int ageSelected = idxStructSel >= 0 ? (idxStructSel - structureTarget.CreatedAtBarIndex) : int.MaxValue;
                     double distATRSelected = Math.Abs(tp - entry) / atr;
                     double rrSelected = (tp - entry) / riskDistance;
                     _logger.Info(string.Format("[RiskCalculator] ✓ [P2] TP SELECCIONADO: Structure ({0}, Score={1:F2}) @ {2:F2}, R:R={3:F2}",
@@ -830,8 +863,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 if (tp > entry && (validRR || validDistance))
                 {
                     // CRÍTICO: Calcular edad en barras del TF de la estructura, no del gráfico
-                    int currentBarInStructureTF = barData.GetCurrentBarIndex(swingTarget.TF);
-                    int ageSelected = currentBarInStructureTF - swingTarget.CreatedAtBarIndex;
+                    int idxStructSel = barData.GetBarIndexFromTime(swingTarget.TF, analysisTimeTP);
+                    int ageSelected = idxStructSel >= 0 ? (idxStructSel - swingTarget.CreatedAtBarIndex) : int.MaxValue;
                     double distATRSelected = Math.Abs(tp - entry) / atr;
                     string reason = validRR && validDistance ? "R:R y Distancia OK" 
                         : validRR ? "R:R OK (Distancia ignorada)" 
@@ -884,7 +917,10 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
             // LOG DETALLADO: Recopilar TODOS los candidatos TP para análisis post-mortem
             var allCandidates = new List<Tuple<string, string, double, int, double, double, int>>(); // (priority, type, score, tf, price, distATR, age)
-            double atr = barData.GetATR(zone.TFDominante, currentBar, 14);
+            int decisionTF_local = _config.DecisionTimeframeMinutes;
+            DateTime analysisTimeTP = barData.GetBarTime(decisionTF_local, currentBar);
+            int idxAtrDom = barData.GetBarIndexFromTime(zone.TFDominante, analysisTimeTP);
+            double atr = idxAtrDom >= 0 ? barData.GetATR(zone.TFDominante, 14, idxAtrDom) : 1.0;
 
             // Recopilar Liquidity targets
             foreach (var tf in _config.TimeframesToUse.OrderByDescending(t => t))
@@ -896,8 +932,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 {
                     double tpPrice = liq.High;
                     double distATR = Math.Abs(entry - tpPrice) / atr;
-                    int currentBarInStructureTF = barData.GetCurrentBarIndex(liq.TF);
-                    int age = currentBarInStructureTF - liq.CreatedAtBarIndex;
+                    int idxStruct = barData.GetBarIndexFromTime(liq.TF, analysisTimeTP);
+                    int age = idxStruct >= 0 ? (idxStruct - liq.CreatedAtBarIndex) : int.MaxValue;
                     allCandidates.Add(Tuple.Create("P1", liq.Type, liq.Score, liq.TF, tpPrice, distATR, age));
                 }
             }
@@ -912,8 +948,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 {
                     double tpPrice = str.High;
                     double distATR = Math.Abs(entry - tpPrice) / atr;
-                    int currentBarInStructureTF = barData.GetCurrentBarIndex(str.TF);
-                    int age = currentBarInStructureTF - str.CreatedAtBarIndex;
+                    int idxStruct = barData.GetBarIndexFromTime(str.TF, analysisTimeTP);
+                    int age = idxStruct >= 0 ? (idxStruct - str.CreatedAtBarIndex) : int.MaxValue;
                     allCandidates.Add(Tuple.Create("P2", str.Type, str.Score, str.TF, tpPrice, distATR, age));
                 }
             }
@@ -928,8 +964,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 {
                     double tpPrice = sw.Low;
                     double distATR = Math.Abs(entry - tpPrice) / atr;
-                    int currentBarInStructureTF = barData.GetCurrentBarIndex(sw.TF);
-                    int age = currentBarInStructureTF - sw.CreatedAtBarIndex;
+                    int idxStruct = barData.GetBarIndexFromTime(sw.TF, analysisTimeTP);
+                    int age = idxStruct >= 0 ? (idxStruct - sw.CreatedAtBarIndex) : int.MaxValue;
                     allCandidates.Add(Tuple.Create("P3", "Swing", sw.Score, sw.TF, tpPrice, distATR, age));
                 }
             }
@@ -955,8 +991,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 if (tp < entry)
                 {
                     // CRÍTICO: Calcular edad en barras del TF de la estructura, no del gráfico
-                    int currentBarInStructureTF = barData.GetCurrentBarIndex(liquidityTarget.TF);
-                    int ageSelected = currentBarInStructureTF - liquidityTarget.CreatedAtBarIndex;
+                    int idxStructSel = barData.GetBarIndexFromTime(liquidityTarget.TF, analysisTimeTP);
+                    int ageSelected = idxStructSel >= 0 ? (idxStructSel - liquidityTarget.CreatedAtBarIndex) : int.MaxValue;
                     double distATRSelected = Math.Abs(entry - tp) / atr;
                     double rrSelected = (entry - tp) / riskDistance;
                     _logger.Info(string.Format("[RiskCalculator] ✓ [P1] TP SELECCIONADO: Liquidity ({0}) @ {1:F2}, R:R={2:F2}",
@@ -987,8 +1023,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 if (tp < entry)
                 {
                     // CRÍTICO: Calcular edad en barras del TF de la estructura, no del gráfico
-                    int currentBarInStructureTF = barData.GetCurrentBarIndex(structureTarget.TF);
-                    int ageSelected = currentBarInStructureTF - structureTarget.CreatedAtBarIndex;
+                    int idxStructSel = barData.GetBarIndexFromTime(structureTarget.TF, analysisTimeTP);
+                    int ageSelected = idxStructSel >= 0 ? (idxStructSel - structureTarget.CreatedAtBarIndex) : int.MaxValue;
                     double distATRSelected = Math.Abs(entry - tp) / atr;
                     double rrSelected = (entry - tp) / riskDistance;
                     _logger.Info(string.Format("[RiskCalculator] ✓ [P2] TP SELECCIONADO: Structure ({0}, Score={1:F2}) @ {2:F2}, R:R={3:F2}",
@@ -1031,8 +1067,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 if (tp < entry && (validRR || validDistance))
                 {
                     // CRÍTICO: Calcular edad en barras del TF de la estructura, no del gráfico
-                    int currentBarInStructureTF = barData.GetCurrentBarIndex(swingTarget.TF);
-                    int ageSelected = currentBarInStructureTF - swingTarget.CreatedAtBarIndex;
+                    int idxStructSel = barData.GetBarIndexFromTime(swingTarget.TF, analysisTimeTP);
+                    int ageSelected = idxStructSel >= 0 ? (idxStructSel - swingTarget.CreatedAtBarIndex) : int.MaxValue;
                     double distATRSelected = Math.Abs(entry - tp) / atr;
                     string reason = validRR && validDistance ? "R:R y Distancia OK" 
                         : validRR ? "R:R OK (Distancia ignorada)" 
@@ -1097,8 +1133,13 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                         if (!swingsByTF.ContainsKey(tf)) swingsByTF[tf] = 0;
                         swingsByTF[tf]++;
                         // V5.7c: FILTRO DE EDAD - Rechazar estructuras obsoletas
-                        int currentBarInStructureTF = barData.GetCurrentBarIndex(s.TF);
-                        int age = currentBarInStructureTF - s.CreatedAtBarIndex;
+                        int idxAtTime = barData.GetBarIndexFromTime(s.TF, _currentAnalysisTime);
+                        if (idxAtTime < 0)
+                        {
+                            rejectedByAge++;
+                            continue;
+                        }
+                        int age = idxAtTime - s.CreatedAtBarIndex;
                         int maxAge = _config.MaxAgeForSL_ByTF.ContainsKey(s.TF) ? _config.MaxAgeForSL_ByTF[s.TF] : 100;
                         int effectiveMaxAge = _config.EnableRiskAgeBypassForDiagnostics
                             ? int.MaxValue
@@ -1139,8 +1180,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             {
                 idx++;
                 // CRÍTICO: Calcular edad en barras del TF de la estructura, no del gráfico
-                int currentBarInStructureTF = barData.GetCurrentBarIndex(c.Item2);
-                int age = currentBarInStructureTF - c.Item1.CreatedAtBarIndex;
+                int idxAtTime2 = barData.GetBarIndexFromTime(c.Item2, _currentAnalysisTime);
+                int age = idxAtTime2 >= 0 ? (idxAtTime2 - c.Item1.CreatedAtBarIndex) : int.MaxValue;
                 bool isInBand = (c.Item3 >= 10.0 && c.Item3 <= 15.0);
                 _logger.Info(string.Format(
                     "[DIAGNOSTICO][Risk] SL_CANDIDATE: Idx={0} Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} InBand={6}",
@@ -1155,8 +1196,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             if (inBand.Count > 0)
             {
                 var best = inBand.First();
-                int currentBarInStructureTF = barData.GetCurrentBarIndex(best.Item2);
-                int ageSelected = currentBarInStructureTF - best.Item1.CreatedAtBarIndex;
+                int idxBest = barData.GetBarIndexFromTime(best.Item2, _currentAnalysisTime);
+                int ageSelected = idxBest >= 0 ? (idxBest - best.Item1.CreatedAtBarIndex) : int.MaxValue;
                 _logger.Info(string.Format("[DIAGNOSTICO][Risk] SLPick BUY: Zone={0} SwingTF={1} SLDistATR={2:F2} Target={3:F1} Banda=[{4:F0},{5:F0}]",
                     zone.Id, best.Item2, best.Item3, target, bandMin, bandMax));
                 _logger.Info(string.Format("[DIAGNOSTICO][Risk] SL_SELECTED: Zone={0} Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} Reason=InBand[{6:F0},{7:F0}]",
@@ -1167,8 +1208,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             var belowMax = candidates.Where(c => c.Item3 < bandMax).OrderByDescending(c => c.Item3).FirstOrDefault();
             if (belowMax != null)
             {
-                int currentBarInStructureTF = barData.GetCurrentBarIndex(belowMax.Item2);
-                int ageSelected = currentBarInStructureTF - belowMax.Item1.CreatedAtBarIndex;
+                int idxBelow = barData.GetBarIndexFromTime(belowMax.Item2, _currentAnalysisTime);
+                int ageSelected = idxBelow >= 0 ? (idxBelow - belowMax.Item1.CreatedAtBarIndex) : int.MaxValue;
                 _logger.Info(string.Format("[DIAGNOSTICO][Risk] SLPick BUY Fallback<15: Zone={0} SwingTF={1} SLDistATR={2:F2}", zone.Id, belowMax.Item2, belowMax.Item3));
                 _logger.Info(string.Format("[DIAGNOSTICO][Risk] SL_SELECTED: Zone={0} Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} Reason=Fallback<15",
                     zone.Id, belowMax.Item1.Score, belowMax.Item2, belowMax.Item3, ageSelected, belowMax.Item1.Low));
@@ -1203,8 +1244,13 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                         if (!swingsByTF.ContainsKey(tf)) swingsByTF[tf] = 0;
                         swingsByTF[tf]++;
                         // V5.7c: FILTRO DE EDAD - Rechazar estructuras obsoletas
-                        int currentBarInStructureTF = barData.GetCurrentBarIndex(s.TF);
-                        int age = currentBarInStructureTF - s.CreatedAtBarIndex;
+                        int idxAtTime = barData.GetBarIndexFromTime(s.TF, _currentAnalysisTime);
+                        if (idxAtTime < 0)
+                        {
+                            rejectedByAge++;
+                            continue;
+                        }
+                        int age = idxAtTime - s.CreatedAtBarIndex;
                         int maxAge = _config.MaxAgeForSL_ByTF.ContainsKey(s.TF) ? _config.MaxAgeForSL_ByTF[s.TF] : 100;
                         int effectiveMaxAge = _config.EnableRiskAgeBypassForDiagnostics
                             ? int.MaxValue
@@ -1245,8 +1291,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             {
                 idx++;
                 // CRÍTICO: Calcular edad en barras del TF de la estructura, no del gráfico
-                int currentBarInStructureTF = barData.GetCurrentBarIndex(c.Item2);
-                int age = currentBarInStructureTF - c.Item1.CreatedAtBarIndex;
+                int idxAtTime3 = barData.GetBarIndexFromTime(c.Item2, _currentAnalysisTime);
+                int age = idxAtTime3 >= 0 ? (idxAtTime3 - c.Item1.CreatedAtBarIndex) : int.MaxValue;
                 bool isInBand = (c.Item3 >= 10.0 && c.Item3 <= 15.0);
                 _logger.Info(string.Format(
                     "[DIAGNOSTICO][Risk] SL_CANDIDATE: Idx={0} Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} InBand={6}",
@@ -1262,8 +1308,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             {
                 var best = inBand.First();
                 // CRÍTICO: Calcular edad en barras del TF de la estructura, no del gráfico
-                int currentBarInStructureTF = barData.GetCurrentBarIndex(best.Item2);
-                int ageSelected = currentBarInStructureTF - best.Item1.CreatedAtBarIndex;
+                int idxBest2 = barData.GetBarIndexFromTime(best.Item2, _currentAnalysisTime);
+                int ageSelected = idxBest2 >= 0 ? (idxBest2 - best.Item1.CreatedAtBarIndex) : int.MaxValue;
                 _logger.Info(string.Format("[DIAGNOSTICO][Risk] SLPick SELL: Zone={0} SwingTF={1} SLDistATR={2:F2} Target={3:F1} Banda=[{4:F0},{5:F0}]",
                     zone.Id, best.Item2, best.Item3, target, bandMin, bandMax));
                 _logger.Info(string.Format("[DIAGNOSTICO][Risk] SL_SELECTED: Zone={0} Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} Reason=InBand[{6:F0},{7:F0}]",
@@ -1274,8 +1320,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             if (belowMax != null)
             {
                 // CRÍTICO: Calcular edad en barras del TF de la estructura, no del gráfico
-                int currentBarInStructureTF = barData.GetCurrentBarIndex(belowMax.Item2);
-                int ageSelected = currentBarInStructureTF - belowMax.Item1.CreatedAtBarIndex;
+                int idxBelow2 = barData.GetBarIndexFromTime(belowMax.Item2, _currentAnalysisTime);
+                int ageSelected = idxBelow2 >= 0 ? (idxBelow2 - belowMax.Item1.CreatedAtBarIndex) : int.MaxValue;
                 _logger.Info(string.Format("[DIAGNOSTICO][Risk] SLPick SELL Fallback<15: Zone={0} SwingTF={1} SLDistATR={2:F2}", zone.Id, belowMax.Item2, belowMax.Item3));
                 _logger.Info(string.Format("[DIAGNOSTICO][Risk] SL_SELECTED: Zone={0} Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} Reason=Fallback<15",
                     zone.Id, belowMax.Item1.Score, belowMax.Item2, belowMax.Item3, ageSelected, belowMax.Item1.High));
@@ -1301,8 +1347,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 foreach (var liquidity in allStructures.OrderBy(s => s.Low))
                 {
                     // V5.7c: FILTRO DE EDAD para TP
-                    int currentBarInStructureTF = barData.GetCurrentBarIndex(liquidity.TF);
-                    int age = currentBarInStructureTF - liquidity.CreatedAtBarIndex;
+                    int idxLiq = barData.GetBarIndexFromTime(liquidity.TF, _currentAnalysisTime);
+                    int age = idxLiq >= 0 ? (idxLiq - liquidity.CreatedAtBarIndex) : int.MaxValue;
                     int maxAge = _config.MaxAgeForTP_ByTF.ContainsKey(liquidity.TF) ? _config.MaxAgeForTP_ByTF[liquidity.TF] : 100;
                     int effectiveMaxAge = _config.EnableRiskAgeBypassForDiagnostics
                         ? int.MaxValue
@@ -1332,8 +1378,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 foreach (var liquidity in allStructures.OrderByDescending(s => s.High))
                 {
                     // V5.7c: FILTRO DE EDAD para TP
-                    int currentBarInStructureTF = barData.GetCurrentBarIndex(liquidity.TF);
-                    int age = currentBarInStructureTF - liquidity.CreatedAtBarIndex;
+                    int idxLiqB = barData.GetBarIndexFromTime(liquidity.TF, _currentAnalysisTime);
+                    int age = idxLiqB >= 0 ? (idxLiqB - liquidity.CreatedAtBarIndex) : int.MaxValue;
                     int maxAge = _config.MaxAgeForTP_ByTF.ContainsKey(liquidity.TF) ? _config.MaxAgeForTP_ByTF[liquidity.TF] : 100;
                     int effectiveMaxAge = _config.EnableRiskAgeBypassForDiagnostics
                         ? int.MaxValue
@@ -1364,8 +1410,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 foreach (var structure in allStructures.OrderBy(s => s.Low))
                 {
                     // V5.7c: FILTRO DE EDAD para TP
-                    int currentBarInStructureTF = barData.GetCurrentBarIndex(structure.TF);
-                    int age = currentBarInStructureTF - structure.CreatedAtBarIndex;
+                    int idxStr = barData.GetBarIndexFromTime(structure.TF, _currentAnalysisTime);
+                    int age = idxStr >= 0 ? (idxStr - structure.CreatedAtBarIndex) : int.MaxValue;
                     int maxAge = _config.MaxAgeForTP_ByTF.ContainsKey(structure.TF) ? _config.MaxAgeForTP_ByTF[structure.TF] : 100;
                     int effectiveMaxAge = _config.EnableRiskAgeBypassForDiagnostics
                         ? int.MaxValue
@@ -1396,8 +1442,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 foreach (var structure in allStructures.OrderByDescending(s => s.High))
                 {
                     // V5.7c: FILTRO DE EDAD para TP
-                    int currentBarInStructureTF = barData.GetCurrentBarIndex(structure.TF);
-                    int age = currentBarInStructureTF - structure.CreatedAtBarIndex;
+                    int idxStrB = barData.GetBarIndexFromTime(structure.TF, _currentAnalysisTime);
+                    int age = idxStrB >= 0 ? (idxStrB - structure.CreatedAtBarIndex) : int.MaxValue;
                     int maxAge = _config.MaxAgeForTP_ByTF.ContainsKey(structure.TF) ? _config.MaxAgeForTP_ByTF[structure.TF] : 100;
                     int effectiveMaxAge = _config.EnableRiskAgeBypassForDiagnostics
                         ? int.MaxValue
@@ -1430,8 +1476,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 foreach (var swing in swings)
                 {
                     // V5.7c: FILTRO DE EDAD para TP
-                    int currentBarInStructureTF = barData.GetCurrentBarIndex(swing.TF);
-                    int age = currentBarInStructureTF - swing.CreatedAtBarIndex;
+                    int idxSw = barData.GetBarIndexFromTime(swing.TF, _currentAnalysisTime);
+                    int age = idxSw >= 0 ? (idxSw - swing.CreatedAtBarIndex) : int.MaxValue;
                     int maxAge = _config.MaxAgeForTP_ByTF.ContainsKey(swing.TF) ? _config.MaxAgeForTP_ByTF[swing.TF] : 100;
                     int effectiveMaxAge = _config.EnableRiskAgeBypassForDiagnostics
                         ? int.MaxValue
@@ -1467,8 +1513,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 foreach (var swing in swings)
                 {
                     // V5.7c: FILTRO DE EDAD para TP
-                    int currentBarInStructureTF = barData.GetCurrentBarIndex(swing.TF);
-                    int age = currentBarInStructureTF - swing.CreatedAtBarIndex;
+                    int idxSwB = barData.GetBarIndexFromTime(swing.TF, _currentAnalysisTime);
+                    int age = idxSwB >= 0 ? (idxSwB - swing.CreatedAtBarIndex) : int.MaxValue;
                     int maxAge = _config.MaxAgeForTP_ByTF.ContainsKey(swing.TF) ? _config.MaxAgeForTP_ByTF[swing.TF] : 100;
                     int effectiveMaxAge = _config.EnableRiskAgeBypassForDiagnostics
                         ? int.MaxValue

@@ -444,8 +444,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
             try
             {
-                // Actualizar progreso si el tracker está activo
-                if (_progressTracker != null)
+                // Actualizar progreso SOLO en el TF de decisión si el tracker está activo
+                if (_progressTracker != null && tfMinutes == _config.DecisionTimeframeMinutes)
                 {
                     _progressTracker.Update(barIndex);
                     
@@ -1066,9 +1066,18 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             
             // Fuente de precio para proximidad
             string priceSrc = (_config.ProximityPriceSource ?? "Close").ToLowerInvariant();
-            double currentPrice = priceSrc == "mid"
-                ? _provider.GetMidPrice()
-                : _provider.GetClose(tfMinutes, barIndex);
+            double currentPrice;
+            if (priceSrc == "mid")
+            {
+                // Mid alineado al TF/índice actual: (High+Low)/2 en tfMinutes/barIndex
+                double h = _provider.GetHigh(tfMinutes, barIndex);
+                double l = _provider.GetLow(tfMinutes, barIndex);
+                currentPrice = (h + l) / 2.0;
+            }
+            else
+            {
+                currentPrice = _provider.GetClose(tfMinutes, barIndex);
+            }
             if (currentPrice <= 0)
                 return;
             
@@ -1228,7 +1237,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
                     // Muestreo de drivers de proximidad para diagnósticos
                     _proxDiagSampleCounter++;
-                    const int sampleRate = 50;
+                    int sampleRate = 400; // reducir ruido en histórico
+                    if (_config.EnablePerfDiagnostics)
+                        sampleRate = 100; // más granular si se pide perf diag
                     if ((_proxDiagSampleCounter % sampleRate) == 0)
                     {
                         try
@@ -1246,6 +1257,16 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 if (_config.EnableDebug && updatedCount > 0)
                 {
                     _logger.Debug($"[FAST LOAD] Proximity actualizado: {updatedCount} estructuras en TF {tfMinutes}");
+                }
+
+                // [PIPE][PROX] resumen agregado cada N barras SOLO en TF de decisión
+                if (tfMinutes == _config.DecisionTimeframeMinutes)
+                {
+                    int interval = Math.Max(1, _config.DiagnosticsInterval);
+                    if ((barIndex % interval) == 0)
+                    {
+                        _logger.Info($"[PIPE][PROX] TF={tfMinutes} Bar={barIndex} Updated={updatedCount} TotalStructures={_structuresById.Count}");
+                    }
                 }
             }
             finally
@@ -1655,7 +1676,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                         _stats.LastPurgeTime = DateTime.UtcNow;
                         _stats.LastPurgeCount = lowScoreStructures.Count;
 
-                        _logger.Info($"Purgadas {lowScoreStructures.Count} estructuras de TF:{tfMinutes} por score bajo (< {_config.MinScoreThreshold})");
+                        if (_config.EnablePerfDiagnostics)
+                            _logger.Info($"Purgadas {lowScoreStructures.Count} estructuras de TF:{tfMinutes} por score bajo (< {_config.MinScoreThreshold})");
                     }
                     finally
                     {
@@ -1687,7 +1709,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                         _stats.LastPurgeTime = DateTime.UtcNow;
                         _stats.LastPurgeCount += oldStructures.Count;
 
-                        _logger.Info($"Purgadas {oldStructures.Count} estructuras de TF:{tfMinutes} por edad (> {_config.MaxAgeBarsForPurge} barras)");
+                        if (_config.EnablePerfDiagnostics)
+                            _logger.Info($"Purgadas {oldStructures.Count} estructuras de TF:{tfMinutes} por edad (> {_config.MaxAgeBarsForPurge} barras)");
                     }
                     finally
                     {
@@ -1727,7 +1750,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                         _stats.LastPurgeTime = DateTime.UtcNow;
                         _stats.LastPurgeCount += countToPurge;
 
-                        _logger.Info($"Purgadas {countToPurge} estructuras de TF:{tfMinutes} por límite global (límite: {_config.MaxStructuresPerTF})");
+                        if (_config.EnablePerfDiagnostics)
+                            _logger.Info($"Purgadas {countToPurge} estructuras de TF:{tfMinutes} por límite global (límite: {_config.MaxStructuresPerTF})");
                     }
                     finally
                     {

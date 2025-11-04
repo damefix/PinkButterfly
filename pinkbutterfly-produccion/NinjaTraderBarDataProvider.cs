@@ -25,6 +25,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         private readonly IndicatorBase _indicator;
         private readonly Dictionary<string, double> _atrCache;
         private readonly object _lock = new object();
+        private readonly Dictionary<int, int> _tfToIndex = new Dictionary<int, int>(); // tfMinutes -> BarsArray index
 
         /// <summary>
         /// Constructor del provider
@@ -34,6 +35,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         {
             _indicator = indicator ?? throw new ArgumentNullException(nameof(indicator));
             _atrCache = new Dictionary<string, double>();
+            BuildTfIndexMap();
         }
 
         /// <summary>
@@ -57,12 +59,16 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         {
             try
             {
-                // TODO: Implementar mapeo multi-TF cuando se agreguen DataSeries
-                // Por ahora, usar el timeframe principal
-                if (barIndex < 0 || barIndex >= _indicator.CurrentBar + 1)
+                int i = GetSeriesIndexForTF(tfMinutes);
+                if (i < 0)
                     return DateTime.MinValue;
 
-                return _indicator.Time[_indicator.CurrentBar - barIndex];
+                int current = _indicator.CurrentBars[i];
+                if (barIndex < 0 || barIndex > current)
+                    return DateTime.MinValue;
+
+                int barsAgo = current - barIndex;
+                return _indicator.Times[i][barsAgo];
             }
             catch
             {
@@ -77,15 +83,34 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         {
             try
             {
-                // TODO: Implementar búsqueda binaria eficiente
-                // Por ahora, búsqueda lineal simple
-                for (int i = 0; i <= _indicator.CurrentBar; i++)
+                int i = GetSeriesIndexForTF(tfMinutes);
+                if (i < 0)
+                    return -1;
+
+                int left = 0;
+                int right = _indicator.CurrentBars[i];
+                if (right < 0)
+                    return -1;
+
+                // Binary search (series descendentes): primer índice mid donde Time(mid) >= timeUtc
+                int result = -1;
+                while (left <= right)
                 {
-                    DateTime barTime = _indicator.Time[_indicator.CurrentBar - i];
-                    if (Math.Abs((barTime - timeUtc).TotalMinutes) < tfMinutes / 2.0)
-                        return i;
+                    int mid = left + ((right - left) / 2);
+                    int barsAgo = _indicator.CurrentBars[i] - mid;
+                    DateTime t = _indicator.Times[i][barsAgo];
+                    if (t >= timeUtc)
+                    {
+                        result = mid;      // candidato, buscamos si hay uno anterior que también cumpla
+                        right = mid - 1;   // mover el límite derecho para encontrar el primero
+                    }
+                    else
+                    {
+                        left = mid + 1;    // mover hacia índices más antiguos
+                    }
                 }
-                return -1;
+
+                return result;
             }
             catch
             {
@@ -98,7 +123,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// </summary>
         public int GetCurrentBarIndex(int tfMinutes)
         {
-            return _indicator.CurrentBar;
+            int i = GetSeriesIndexForTF(tfMinutes);
+            return i >= 0 ? _indicator.CurrentBars[i] : -1;
         }
 
         /// <summary>
@@ -121,11 +147,14 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         {
             try
             {
-                if (barIndex < 0 || barIndex > _indicator.CurrentBar)
+                int i = GetSeriesIndexForTF(tfMinutes);
+                if (i < 0) return 0.0;
+                int current = _indicator.CurrentBars[i];
+                if (barIndex < 0 || barIndex > current)
                     return 0.0;
 
-                int barsAgo = _indicator.CurrentBar - barIndex;
-                return _indicator.Open[barsAgo];
+                int barsAgo = current - barIndex;
+                return _indicator.Opens[i][barsAgo];
             }
             catch
             {
@@ -140,11 +169,14 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         {
             try
             {
-                if (barIndex < 0 || barIndex > _indicator.CurrentBar)
+                int i = GetSeriesIndexForTF(tfMinutes);
+                if (i < 0) return 0.0;
+                int current = _indicator.CurrentBars[i];
+                if (barIndex < 0 || barIndex > current)
                     return 0.0;
 
-                int barsAgo = _indicator.CurrentBar - barIndex;
-                return _indicator.High[barsAgo];
+                int barsAgo = current - barIndex;
+                return _indicator.Highs[i][barsAgo];
             }
             catch
             {
@@ -159,11 +191,14 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         {
             try
             {
-                if (barIndex < 0 || barIndex > _indicator.CurrentBar)
+                int i = GetSeriesIndexForTF(tfMinutes);
+                if (i < 0) return 0.0;
+                int current = _indicator.CurrentBars[i];
+                if (barIndex < 0 || barIndex > current)
                     return 0.0;
 
-                int barsAgo = _indicator.CurrentBar - barIndex;
-                return _indicator.Low[barsAgo];
+                int barsAgo = current - barIndex;
+                return _indicator.Lows[i][barsAgo];
             }
             catch
             {
@@ -178,11 +213,14 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         {
             try
             {
-                if (barIndex < 0 || barIndex > _indicator.CurrentBar)
+                int i = GetSeriesIndexForTF(tfMinutes);
+                if (i < 0) return 0.0;
+                int current = _indicator.CurrentBars[i];
+                if (barIndex < 0 || barIndex > current)
                     return 0.0;
 
-                int barsAgo = _indicator.CurrentBar - barIndex;
-                return _indicator.Close[barsAgo];
+                int barsAgo = current - barIndex;
+                return _indicator.Closes[i][barsAgo];
             }
             catch
             {
@@ -212,9 +250,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         {
             try
             {
-                // Intentar obtener bid/ask si está disponible
-                // Si no, usar (high+low)/2 de la barra actual
-                return (_indicator.High[0] + _indicator.Low[0]) / 2.0;
+                // Usar el TF más bajo disponible para un mid consistente e independiente del gráfico
+                if (_tfToIndex.Count == 0)
+                    BuildTfIndexMap();
+                int minTf = _tfToIndex.Keys.Count > 0 ? _tfToIndex.Keys.Min() : -1;
+                int i = minTf >= 0 ? _tfToIndex[minTf] : 0;
+                return (_indicator.Highs[i][0] + _indicator.Lows[i][0]) / 2.0;
             }
             catch
             {
@@ -229,11 +270,14 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         {
             try
             {
-                if (barIndex < 0 || barIndex > _indicator.CurrentBar)
+                int i = GetSeriesIndexForTF(tfMinutes);
+                if (i < 0) return null;
+                int current = _indicator.CurrentBars[i];
+                if (barIndex < 0 || barIndex > current)
                     return null;
 
-                int barsAgo = _indicator.CurrentBar - barIndex;
-                double volume = (double)_indicator.Volume[barsAgo];
+                int barsAgo = current - barIndex;
+                double volume = (double)_indicator.Volumes[i][barsAgo];
                 
                 return volume > 0 ? volume : (double?)null;
             }
@@ -357,6 +401,80 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             catch
             {
                 return 1.0;
+            }
+        }
+
+        // ============================================================
+        // Helpers de mapeo TF → BarsArray index
+        // ============================================================
+        private void BuildTfIndexMap()
+        {
+            try
+            {
+                _tfToIndex.Clear();
+                int n = _indicator.BarsArray != null ? _indicator.BarsArray.Length : 0;
+                for (int i = 0; i < n; i++)
+                {
+                    var bp = _indicator.BarsArray[i].BarsPeriod;
+                    int minutes = BarsPeriodToMinutes(bp);
+                    if (!_tfToIndex.ContainsKey(minutes))
+                        _tfToIndex[minutes] = i;
+                }
+                // Fallback: asegurar al menos el primario
+                if (!_tfToIndex.ContainsKey(_indicator.Bars.BarsPeriod.Value))
+                {
+                    _tfToIndex[_indicator.Bars.BarsPeriod.Value] = 0;
+                }
+            }
+            catch
+            {
+                // silencioso; se reconstruirá en el primer acceso
+            }
+        }
+
+        private int GetSeriesIndexForTF(int tfMinutes)
+        {
+            if (_tfToIndex.Count == 0)
+                BuildTfIndexMap();
+
+            if (_tfToIndex.TryGetValue(tfMinutes, out int idx))
+                return idx;
+
+            // Elegir el TF más cercano disponible si no hay coincidencia exacta
+            if (_tfToIndex.Count > 0)
+            {
+                int nearest = -1;
+                int bestDiff = int.MaxValue;
+                foreach (var kv in _tfToIndex)
+                {
+                    int diff = Math.Abs(kv.Key - tfMinutes);
+                    if (diff < bestDiff)
+                    {
+                        bestDiff = diff;
+                        nearest = kv.Value;
+                    }
+                }
+                return nearest;
+            }
+
+            return 0; // Fallback al primario
+        }
+
+        private int BarsPeriodToMinutes(BarsPeriod bp)
+        {
+            switch (bp.BarsPeriodType)
+            {
+                case BarsPeriodType.Minute:
+                    return bp.Value;
+                case BarsPeriodType.Day:
+                    return bp.Value * 1440;
+                case BarsPeriodType.Week:
+                    return bp.Value * 10080;
+                case BarsPeriodType.Month:
+                    return bp.Value * 43200;
+                default:
+                    // Otros tipos: usar el TF del primario
+                    return _indicator.Bars.BarsPeriod.Value;
             }
         }
     }

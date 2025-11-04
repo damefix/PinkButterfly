@@ -82,9 +82,18 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 // ============================================================
                 // Fuente de precio para proximidad (Close por TF o Mid global)
                 string priceSrc = (_config.ProximityPriceSource ?? "Close").ToLowerInvariant();
-                double currentPrice = priceSrc == "mid"
-                    ? _provider.GetMidPrice()
-                    : _provider.GetClose(structure.TF, currentBarIndex);
+                double currentPrice;
+                if (priceSrc == "mid")
+                {
+                    // Mid por TF/índice alineado: (High+Low)/2 en el TF de la estructura
+                    double h = _provider.GetHigh(structure.TF, currentBarIndex);
+                    double l = _provider.GetLow(structure.TF, currentBarIndex);
+                    currentPrice = (h + l) / 2.0;
+                }
+                else
+                {
+                    currentPrice = _provider.GetClose(structure.TF, currentBarIndex);
+                }
                 // Para FVGs, medir proximidad contra el borde de entrada (más estricto); resto usa centro
                 double referencePrice = structure.CenterPrice;
 

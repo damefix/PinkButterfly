@@ -13,6 +13,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
@@ -67,6 +68,21 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         private const string TAG_SL = "SL_";
         private const string TAG_TP = "TP_";
         private const string TAG_PANEL = "PANEL_";
+
+        // Control de ventana histórica anclada al TF de decisión
+        private bool _startAnchored;
+        private DateTime _startTimeDecision;
+        private DateTime _endTimeDecision;
+        private Dictionary<int, int> _barsToSkipPerTF;
+        private Dictionary<int, int> _barsEndPerTF;
+        private int _decisionTFIndex;
+        private int _startAbsIndexDecision;
+        // Barrera de decisión: llevar control del último índice procesado por TF
+        private Dictionary<int, int> _lastProcessedIndexPerTF;
+
+        // [DIAG] Acumuladores de rendimiento (solo TF de decisión)
+        private int _diagBarCounter;
+        private double _accumOnBarCloseMs;
 
         #endregion
 
@@ -325,6 +341,43 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     _coreEngine.StartProgressTracking(totalBars);
                     Print($"[ExpertTrader] ProgressTracker inicializado para {totalBars} barras");
                     
+                    // Inicialización gating temporal por TF de decisión
+                    try
+                    {
+                        if (_barsToSkipPerTF == null)
+                            _barsToSkipPerTF = new Dictionary<int, int>();
+                        if (_barsEndPerTF == null)
+                            _barsEndPerTF = new Dictionary<int, int>();
+                        _barsToSkipPerTF.Clear();
+                        _barsEndPerTF.Clear();
+
+                        _decisionTFIndex = -1;
+                        int decisionTF = _config.DecisionTimeframeMinutes;
+                        for (int i = 0; i < BarsArray.Length; i++)
+                        {
+                            int tfMin = GetMinutesFromBarsPeriod(BarsArray[i].BarsPeriod);
+                            if (tfMin == decisionTF)
+                            {
+                                _decisionTFIndex = i;
+                                break;
+                            }
+                        }
+                        if (_decisionTFIndex < 0)
+                            _decisionTFIndex = 0; // fallback
+
+                        // Anclaje por TIEMPO absoluto (independiente del TF del gráfico)
+                        _startAbsIndexDecision = 0; // no se usa para anclar
+                        _startAnchored = false;
+                        _startTimeDecision = DateTime.MinValue;
+                        Print($"[ExpertTrader] TF decisión index={_decisionTFIndex} anclaje por TIEMPO habilitado");
+
+                        // Precomputación en DataLoaded eliminada: se hará en el primer OnBarUpdate del TF de decisión
+                    }
+                    catch (Exception exGate)
+                    {
+                        Print($"[ExpertTrader] WARNING gating temporal: {exGate.Message}");
+                    }
+
                     Print("[ExpertTrader] State.DataLoaded completado exitosamente");
                 }
                 catch (Exception ex)
@@ -374,67 +427,170 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 // 3. Obtener el índice de barra correcto para ESE TF
                 int barIndex = CurrentBars[barsInProgressIndex];
                 
-                // 4. Verificar que este TF tenga suficientes datos (al menos 20 barras)
-                if (barIndex < 20)
+                // 4. Precomputar ventana [start..end] si aún no está anclado (primer OnBarUpdate del TF decisión)
+                if (!_startAnchored)
+                {
+                    if (barsInProgressIndex != _decisionTFIndex)
+                        return; // solo el TF decisión puede anclar
+
+                    try
+                    {
+                        if (_barsToSkipPerTF == null) _barsToSkipPerTF = new Dictionary<int, int>();
+                        if (_barsEndPerTF == null) _barsEndPerTF = new Dictionary<int, int>();
+
+                        int decisionTFLocal = _config.DecisionTimeframeMinutes;
+                        int countDecision = BarsArray[_decisionTFIndex].Count;
+                        int currentBarsDecision = CurrentBars[_decisionTFIndex];
+
+                        if (countDecision < _config.BacktestBarsForAnalysis || currentBarsDecision < _config.BacktestBarsForAnalysis - 1)
+                            return; // esperar a tener suficiente histórico avanzado
+
+                        int desiredWindow = Math.Max(1, _config.BacktestBarsForAnalysis - 1);
+                        int endIdxDecision = currentBarsDecision;
+                        int startIdxDecision = Math.Max(1, currentBarsDecision - desiredWindow);
+                        _startAbsIndexDecision = startIdxDecision;
+
+                        int barsAgoStart = currentBarsDecision - startIdxDecision;
+                        int barsAgoEnd = currentBarsDecision - endIdxDecision;
+
+                        _barsToSkipPerTF.Clear();
+                        _barsEndPerTF.Clear();
+
+                        bool canUseTimes = barsAgoStart >= 0 && barsAgoEnd >= 0 &&
+                                           barsAgoStart <= currentBarsDecision && barsAgoEnd <= currentBarsDecision;
+
+                        if (canUseTimes)
+                        {
+                            _startTimeDecision = Times[_decisionTFIndex][barsAgoStart];
+                            _endTimeDecision = Times[_decisionTFIndex][barsAgoEnd];
+
+                            foreach (int tf in _config.TimeframesToUse)
+                            {
+                                int seriesIdx = -1;
+                                for (int i = 0; i < BarsArray.Length; i++)
+                                {
+                                    if (GetMinutesFromBarsPeriod(BarsArray[i].BarsPeriod) == tf)
+                                    { seriesIdx = i; break; }
+                                }
+                                if (seriesIdx < 0) seriesIdx = 0;
+
+                                int skipIdx = FindBarIndexFromTime(seriesIdx, _startTimeDecision);
+                                int endIdx = FindBarIndexFromTime(seriesIdx, _endTimeDecision);
+                                _barsToSkipPerTF[tf] = Math.Max(0, skipIdx);
+                                _barsEndPerTF[tf] = endIdx >= 0 ? endIdx : CurrentBars[seriesIdx];
+                            }
+
+                            // Inicializar mapa de últimos procesados para la barrera
+                            if (_lastProcessedIndexPerTF == null) _lastProcessedIndexPerTF = new Dictionary<int, int>();
+                            _lastProcessedIndexPerTF.Clear();
+                            foreach (int tf in _config.TimeframesToUse)
+                            {
+                                int startIdx = _barsToSkipPerTF.ContainsKey(tf) ? _barsToSkipPerTF[tf] : 0;
+                                _lastProcessedIndexPerTF[tf] = Math.Max(0, startIdx - 1);
+                            }
+
+                            if (_fileLogger != null)
+                            {
+                                var skips = string.Join(", ", _barsToSkipPerTF.Select(kv => $"{kv.Key}m->{kv.Value}"));
+                                _fileLogger.Info($"[ANCHOR] startIdx={_startAbsIndexDecision} startTime={_startTimeDecision:yyyy-MM-dd HH:mm} endTime={_endTimeDecision:yyyy-MM-dd HH:mm} skips={{ {skips} }}");
+                                foreach (var kv in _barsToSkipPerTF)
+                                {
+                                    int e = _barsEndPerTF[kv.Key];
+                                    _fileLogger.Info($"[WINDOW] TF={kv.Key} skip={kv.Value} end={e} window={e - kv.Value}");
+                                }
+                            }
+                        }
+                        else
+                        {
+                            // Fallback inicial: gate solo para TF decisión por índices absolutos
+                            _barsToSkipPerTF[decisionTFLocal] = startIdxDecision;
+                            _barsEndPerTF[decisionTFLocal] = endIdxDecision;
+                            _startTimeDecision = DateTime.MinValue;
+                            _endTimeDecision = DateTime.MinValue;
+                            if (_fileLogger != null)
+                                _fileLogger.Info($"[ANCHOR_WARN] Defer mapping by time (barsAgoStart={barsAgoStart}, currentBars={currentBarsDecision})");
+                        }
+
+                        _startAnchored = true;
+                    }
+                    catch (Exception exPre)
+                    {
+                        Print($"[ExpertTrader] ERROR precompute ventana: {exPre.Message}");
+                        return;
+                    }
+                }
+
+                // 5. Gate de ventana [skip..end] precomputada
+                if (!_startAnchored || _barsToSkipPerTF == null || _barsEndPerTF == null)
                     return;
-                
-                // 5. Control de carga histórica: solo procesar las últimas N barras
-                int totalBars = BarsArray[barsInProgressIndex].Count;
-                int barsToSkip = totalBars - _config.BacktestBarsForAnalysis;
-                
-                if (State == State.Historical && barIndex < barsToSkip)
+                if (_barsToSkipPerTF.TryGetValue(tfMinutes, out int skipRequired) && barIndex < skipRequired)
+                    return;
+                if (_barsEndPerTF.TryGetValue(tfMinutes, out int endAllowed) && barIndex > endAllowed)
+                    return;
+
+                // 6. A partir de aquí, solo el TF de decisión orquesta el pipeline (barrera)
+                if (barsInProgressIndex != _decisionTFIndex)
                 {
-                    // Saltar barras antiguas en histórico para acelerar la carga
+                    // Permitir dibujo en el TF del GRÁFICO (BarsInProgress==0) aunque no sea el TF de decisión
+                    if (BarsInProgress == 0)
+                    {
+                        DrawVisualization();
+                    }
                     return;
                 }
-                
-                // 6. Control de logging: solo loggear las últimas N barras del histórico
-                bool enableLogging = (State == State.Realtime) || 
-                                    (barIndex >= totalBars - _config.LoggingThresholdBars);
-                
-                if (barIndex == barsToSkip && State == State.Historical)
+
+                // 7. Catch-up por TF hasta el analysisTime de la barra de decisión actual
+                int decisionTF = _config.DecisionTimeframeMinutes;
+                DateTime analysisTime = _barDataProvider.GetBarTime(decisionTF, barIndex);
+                foreach (int tf in _config.TimeframesToUse)
                 {
-                    Print($"[ExpertTrader] Iniciando procesamiento histórico desde barra {barIndex}/{totalBars} (TF {tfMinutes}m)");
-                }
-                
-                // 7. CRÍTICO: Solo llamar a CoreEngine.OnBarClose si el TF está en TimeframesToUse
-                // Esto protege la integridad del scoring y análisis MTF
-                // NOTA: En modo Fast Load, OnBarClose() está bloqueado internamente (modo estático)
-                if (_config.TimeframesToUse.Contains(tfMinutes))
-                {
-                    _coreEngine.OnBarClose(tfMinutes, barIndex);
-                    
-                    if (enableLogging)
-                        _logger.Debug($"[ExpertTrader] OnBarClose({tfMinutes}m, bar {barIndex}) - BarsInProgress: {barsInProgressIndex}");
-                }
-                else if (barsInProgressIndex == 0)
-                {
-                    // Este es el TF del gráfico, pero NO está en TimeframesToUse
-                    // Solo usarlo para dibujar, NO para análisis
-                    if (enableLogging)
-                        _logger.Debug($"[ExpertTrader] TF {tfMinutes}m (gráfico) - Solo dibujo, no análisis");
+                    int targetIdx = _barDataProvider.GetBarIndexFromTime(tf, analysisTime);
+                    if (!_barsToSkipPerTF.TryGetValue(tf, out int tfStart)) tfStart = 0;
+                    if (!_barsEndPerTF.TryGetValue(tf, out int tfEnd)) tfEnd = barIndex;
+                    if (_lastProcessedIndexPerTF == null) _lastProcessedIndexPerTF = new Dictionary<int, int>();
+                    if (!_lastProcessedIndexPerTF.TryGetValue(tf, out int lastProc)) lastProc = Math.Max(0, tfStart - 1);
+
+                    if (targetIdx < 0)
+                    {
+                        if (_fileLogger != null) _fileLogger.Info($"[CTX_NO_DATA] TF={tf} analysisTime={analysisTime:yyyy-MM-dd HH:mm} (sin catch-up)");
+                        continue;
+                    }
+                    int begin = Math.Max(lastProc + 1, tfStart);
+                    int end = Math.Min(targetIdx, tfEnd);
+                    if (begin <= end)
+                    {
+                        if (_fileLogger != null) _fileLogger.Info($"[SYNC] TF={tf} from={begin} to={end} steps={end - begin + 1}");
+                        for (int i = begin; i <= end; i++)
+                        {
+                            _coreEngine.OnBarClose(tf, i);
+                        }
+                        _lastProcessedIndexPerTF[tf] = end;
+                    }
                 }
                 
                 // FAST LOAD: Actualizar scores dinámicamente incluso en modo estático
                 // Los scores de proximidad deben recalcularse en cada barra
-                if (_config.EnableFastLoadFromJSON && _config.TimeframesToUse.Contains(tfMinutes))
+                if (_config.EnableFastLoadFromJSON && barsInProgressIndex == _decisionTFIndex)
                 {
                     _coreEngine.UpdateScoresForFastLoad(tfMinutes, barIndex);
                 }
 
-                // 8. Solo en el TF principal (BarsInProgress == 0), generar decisión y dibujar
-                // El análisis usa el TF más bajo de TimeframesToUse, no necesariamente el del gráfico
-                if (BarsInProgress == 0 && barIndex >= 20)
+                // 9. Generar decisión solo cuando se actualiza el TF de decisión
+                if (_decisionTFIndex >= 0 && barsInProgressIndex == _decisionTFIndex)
                 {
                     // Asegurar inicialización perezosa si algún componente es nulo (protege contra carreras del ciclo de vida)
                     EnsureInitializedLazy();
 
+                    // Recalcular métricas locales para logs
+                    int totalBars = BarsArray[barsInProgressIndex].Count;
+                    bool enableLogging = (State == State.Realtime) || (barIndex >= totalBars - _config.LoggingThresholdBars);
+
                     if (enableLogging)
                         _logger.Debug($"[ExpertTrader] Generando decisión para BarIndex: {barIndex}");
                     
-                    // Usar el TF más bajo de TimeframesToUse como referencia para el análisis
-                    int lowestTF = _config.TimeframesToUse.Min();
-                    int analysisBarIndex = _barDataProvider != null ? _barDataProvider.GetCurrentBarIndex(lowestTF) : -1;
+                    // Usar el TF de DECISIÓN como referencia para el análisis
+                    int analysisTF = _config.DecisionTimeframeMinutes;
+                    int analysisBarIndex = barIndex; // índice del TF decisión ya sincronizado
                     
                     // Null-guards y validaciones
                     if (_decisionEngine == null || _coreEngine == null || _barDataProvider == null)
@@ -444,12 +600,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     }
                     if (analysisBarIndex < 0)
                     {
-                        _logger.Error($"[ExpertTrader] analysisBarIndex inválido ({analysisBarIndex}) para TF {lowestTF}m. Abortando GenerateDecision.");
+                        _logger.Error($"[ExpertTrader] analysisBarIndex inválido ({analysisBarIndex}) para TF {analysisTF}m. Abortando GenerateDecision.");
                         return;
                     }
                     
-                    // Generar decisión con DecisionEngine usando el barIndex del TF de análisis
-                    _lastDecision = _decisionEngine.GenerateDecision(_barDataProvider, _coreEngine, analysisBarIndex, lowestTF, AccountSize);
+                    // Generar decisión con DecisionEngine usando el barIndex del TF de DECISIÓN
+                    _lastDecision = _decisionEngine.GenerateDecision(_barDataProvider, _coreEngine, analysisBarIndex, analysisTF, AccountSize);
 
                     // LOG DETALLADO DE LA DECISIÓN (valores SL/TP)
                     if (_lastDecision != null && enableLogging)
@@ -458,8 +614,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                         _logger.Debug($"[ExpertTrader] *** DECISIÓN *** Action={_lastDecision.Action}, Entry={_lastDecision.Entry:F2}, SL={_lastDecision.StopLoss:F2}, TP={_lastDecision.TakeProfit:F2}, Conf={_lastDecision.Confidence:F3}, R:R={rr:F2}");
                     }
 
-                    // TRACKING DE OPERACIÓN ACTIVA (V5.7e: usar TF de análisis, no TF del gráfico)
-                    ProcessTradeTracking(lowestTF, analysisBarIndex);
+                    // TRACKING DE OPERACIÓN ACTIVA: usar TF de DECISIÓN
+                    ProcessTradeTracking(analysisTF, analysisBarIndex);
 
                     // Obtener HeatZones del snapshot (para el panel de información)
                     _lastHeatZones = GetTopHeatZones();
@@ -568,6 +724,40 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     _logger.Warning($"[ExpertTrader] BarsPeriodType {period.BarsPeriodType} no soportado para MTF, usando TF principal");
                     return Bars.BarsPeriod.Value;
             }
+        }
+
+        /// <summary>
+        /// Busca el primer índice de barra (0 = más antigua, Count-1 = más reciente) cuyo tiempo >= targetTime
+        /// Usa Times[] directamente del seriesIdx (independiente del provider/CurrentBars)
+        /// </summary>
+        private int FindBarIndexFromTime(int seriesIdx, DateTime targetTime)
+        {
+            int count = BarsArray[seriesIdx].Count;
+            if (count <= 0)
+                return -1;
+
+            int left = 0;
+            int right = count - 1;
+            int result = -1;
+
+            while (left <= right)
+            {
+                int mid = left + (right - left) / 2;
+                int barsAgo = (count - 1) - mid; // Times[0] = más reciente
+                DateTime t = Times[seriesIdx][barsAgo];
+
+                if (t >= targetTime)
+                {
+                    result = mid; // candidato, buscar más antiguo a la izquierda
+                    right = mid - 1;
+                }
+                else
+                {
+                    left = mid + 1;
+                }
+            }
+
+            return result >= 0 ? result : 0;
         }
 
         #endregion

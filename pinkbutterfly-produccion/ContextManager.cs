@@ -79,18 +79,30 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         {
             var summary = new DecisionSummary();
 
-            // CurrentPrice: Precio de cierre de la barra actual en el TF principal
+            // CurrentPrice: usar el precio del TF MÁS ALTO, alineado por tiempo con el TF de decisión
+            int decisionTF = _config.DecisionTimeframeMinutes;
+            DateTime analysisTime = barData.GetBarTime(decisionTF, currentBar);
             int primaryTF = _config.TimeframesToUse.OrderByDescending(tf => tf).FirstOrDefault();
             if (primaryTF == 0)
                 primaryTF = 60; // Fallback a 1H
-
-            summary.CurrentPrice = barData.GetClose(primaryTF, currentBar);
+            int idxPrim = barData.GetBarIndexFromTime(primaryTF, analysisTime);
+            if (idxPrim < 0)
+            {
+                _logger.Warning($"[CTX_NO_DATA] Sin índice alineado en TF={primaryTF} para time={analysisTime:yyyy-MM-dd HH:mm}. CurrentPrice=0");
+                summary.CurrentPrice = 0.0;
+                snapshot.Summary = summary;
+                return; // no continuar sin datos alineados
+            }
+            summary.CurrentPrice = barData.GetClose(primaryTF, idxPrim);
 
             // ATRByTF: Calcular ATR para cada timeframe configurado
             summary.ATRByTF = new Dictionary<int, double>();
+            // Alinear por tiempo con el TF de decisión para obtener índices correctos por TF
             foreach (int tf in _config.TimeframesToUse)
             {
-                double atr = barData.GetATR(tf, currentBar, 14);
+                int idx = barData.GetBarIndexFromTime(tf, analysisTime);
+                // Firma correcta: GetATR(tfMinutes, period, barIndex)
+                double atr = idx >= 0 ? barData.GetATR(tf, 14, idx) : 0.0;
                 summary.ATRByTF[tf] = atr;
             }
 
@@ -136,15 +148,27 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             // 200 barras de 1H = ~8 días (captura tendencias de corto/medio plazo)
             int primaryTF = 60; // 1H fijo para cálculo de bias
 
+            // CRÍTICO: Alinear índice al tiempo de análisis del TF de decisión
+            int decisionTF = _config.DecisionTimeframeMinutes;
+            DateTime analysisTime = _barData.GetBarTime(decisionTF, currentBar);
+            int idx60 = _barData.GetBarIndexFromTime(primaryTF, analysisTime);
+            if (idx60 < 0)
+            {
+                _logger.Warning($"[CTX_NO_DATA] Sin índice 60m alineado para time={analysisTime:yyyy-MM-dd HH:mm}. Bias omitido");
+                snapshot.GlobalBias = "Neutral";
+                snapshot.GlobalBiasStrength = 0.0;
+                return;
+            }
+
             // CRÍTICO: Obtener CurrentPrice del MISMO TF que usamos para el promedio
-            double currentPrice = _barData.GetClose(primaryTF, currentBar);
+            double currentPrice = _barData.GetClose(primaryTF, idx60);
             double sumPrices = 0.0;
             int period = 200;
             int validBars = 0;
 
-            for (int i = 0; i < period && (currentBar - i) >= 0; i++)
+            for (int i = 0; i < period && (idx60 - i) >= 0; i++)
             {
-                sumPrices += _barData.GetClose(primaryTF, currentBar - i);
+                sumPrices += _barData.GetClose(primaryTF, idx60 - i);
                 validBars++;
             }
 
@@ -233,11 +257,22 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             if (primaryTF == 0)
                 primaryTF = 60; // Fallback a 1H
 
-            // ATR actual (14 períodos)
-            double atrActual = barData.GetATR(primaryTF, currentBar, 14);
+            // Alinear índice del TF primario al tiempo del TF de decisión
+            int decisionTF_forVol = _config.DecisionTimeframeMinutes;
+            DateTime analysisTime_forVol = _barData.GetBarTime(decisionTF_forVol, currentBar);
+            int idxPrim = _barData.GetBarIndexFromTime(primaryTF, analysisTime_forVol);
+            if (idxPrim < 0)
+            {
+                _logger.Warning($"[CTX_NO_DATA] Sin índice primario para volatilidad en time={analysisTime_forVol:yyyy-MM-dd HH:mm}. Vol=0.5");
+                snapshot.MarketVolatilityNormalized = 0.5;
+                return;
+            }
 
-            // ATR de largo plazo (200 períodos)
-            double atrLongTerm = barData.GetATR(primaryTF, currentBar, 200);
+            // ATR actual (14 períodos) - firma correcta
+            double atrActual = barData.GetATR(primaryTF, 14, idxPrim);
+
+            // ATR de largo plazo (200 períodos) - firma correcta
+            double atrLongTerm = barData.GetATR(primaryTF, 200, idxPrim);
 
             // Evitar división por cero
             if (atrLongTerm <= 0)

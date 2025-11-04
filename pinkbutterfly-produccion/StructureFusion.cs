@@ -52,11 +52,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             if (coreEngine == null)
                 throw new ArgumentNullException(nameof(coreEngine));
 
-            _logger.Debug("[StructureFusion] Fusionando estructuras en HeatZones (Fusión Jerárquica)...");
+            if (_config.EnablePerfDiagnostics)
+                _logger.Debug("[StructureFusion] Fusionando estructuras en HeatZones (Fusión Jerárquica)...");
 
             // 1. Separar estructuras por categoría: Anchors (TF alto) y Triggers (TF bajo)
-            var anchors = new List<StructureBase>();  // TFs altos: 240m, 1440m (Contexto)
-            var triggers = new List<StructureBase>(); // TFs bajos: 5m, 15m, 60m (Entrada)
+            var anchors = new List<StructureBase>();  // TFs altos: 60m, 240m, 1440m (Contexto)
+            var triggers = new List<StructureBase>(); // TFs bajos: 5m, 15m (Entrada)
             
             foreach (int tf in _config.TimeframesToUse)
             {
@@ -64,8 +65,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     .Where(s => s.IsActive && s.Score >= _config.HeatZone_MinScore)
                     .ToList();
                 
-                // Clasificar: TFs >= 240m son Anchors, TFs < 240m son Triggers
-                if (tf >= 240)
+                // Clasificar: TFs >= 60m son Anchors, TFs < 60m son Triggers
+                if (tf >= 60)
                     anchors.AddRange(structures);
                 else
                     triggers.AddRange(structures);
@@ -78,12 +79,24 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 return;
             }
 
-            _logger.Debug(string.Format("[StructureFusion] Anchors (TF alto): {0}, Triggers (TF bajo): {1}", 
-                anchors.Count, triggers.Count));
+            if (_config.EnablePerfDiagnostics)
+                _logger.Debug(string.Format("[StructureFusion] Anchors (TF alto): {0}, Triggers (TF bajo): {1}", 
+                    anchors.Count, triggers.Count));
 
-            // 2. Obtener ATR del timeframe más bajo para tolerancia de overlap
+            // 2. Obtener ATR del timeframe más bajo para tolerancia de overlap (alineado por tiempo)
             int lowestTF = _config.TimeframesToUse.Min();
-            double atr = barData.GetATR(lowestTF, currentBar, 14);
+            DateTime analysisTime = barData.GetBarTime(timeframeMinutes, currentBar);
+            int idxLowest = barData.GetBarIndexFromTime(lowestTF, analysisTime);
+            double atr;
+            if (idxLowest < 0)
+            {
+                _logger.Info($"[CTX_NO_DATA] StructureFusion: TF={lowestTF} sin índice alineado para {analysisTime:yyyy-MM-dd HH:mm}. ATR=1.0");
+                atr = 1.0;
+            }
+            else
+            {
+                atr = barData.GetATR(lowestTF, 14, idxLowest);
+            }
             double overlapTolerance = _config.HeatZone_OverlapToleranceATR * atr;
 
             _logger.Debug(string.Format("[StructureFusion] ATR({0}): {1:F2}, OverlapTolerance: {2:F2}",
@@ -124,13 +137,14 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 // Verificar confluencia mínima
                 if (allStructures.Count < _config.HeatZone_MinConfluence)
                 {
+                if (_config.EnablePerfDiagnostics)
                     _logger.Debug(string.Format("[StructureFusion] Trigger {0} no tiene confluencia suficiente ({1} < {2})",
-                        trigger.Id, allStructures.Count, _config.HeatZone_MinConfluence));
+                            trigger.Id, allStructures.Count, _config.HeatZone_MinConfluence));
                     continue;
                 }
 
                 // Crear HeatZone usando SOLO las dimensiones del Trigger (no envolvente total)
-                var heatZone = CreateHierarchicalHeatZone(snapshot, trigger, nearbyTriggers, supportingAnchors, barData, currentBar);
+                var heatZone = CreateHierarchicalHeatZone(snapshot, trigger, nearbyTriggers, supportingAnchors, barData, analysisTime, currentBar);
                 heatZones.Add(heatZone);
 
                 if (supportingAnchors.Count > 0) sfWithAnchors++;
@@ -143,8 +157,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 foreach (var t in nearbyTriggers)
                     assignedTriggers.Add(t.Id);
 
-                _logger.Debug(string.Format("[StructureFusion] HeatZone jerárquica creada: {0} (Trigger TF:{1}, {2} Anchors, Score: {3:F2}, Height: {4:F2})",
-                    heatZone.Id, trigger.TF, supportingAnchors.Count, heatZone.Score, heatZone.High - heatZone.Low));
+                if (_config.EnablePerfDiagnostics)
+                    _logger.Debug(string.Format("[StructureFusion] HeatZone jerárquica creada: {0} (Trigger TF:{1}, {2} Anchors, Score: {3:F2}, Height: {4:F2})",
+                        heatZone.Id, trigger.TF, supportingAnchors.Count, heatZone.Score, heatZone.High - heatZone.Low));
                 // Diagnóstico por zona: lista de TFs trigger/anchor
                 string tfTrigList = string.Join("/", new List<StructureBase> { trigger }.Concat(nearbyTriggers).Select(s=>s.TF).Distinct());
                 string tfAncList = string.Join("/", supportingAnchors.Select(a=>a.TF).Distinct());
@@ -153,9 +168,21 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
             snapshot.HeatZones = heatZones;
 
-            _logger.Debug(string.Format("[StructureFusion] Fusión jerárquica completada: {0} HeatZones creadas", heatZones.Count));
+            if (_config.EnablePerfDiagnostics)
+                _logger.Debug(string.Format("[StructureFusion] Fusión jerárquica completada: {0} HeatZones creadas", heatZones.Count));
             _logger.Info(string.Format("[DIAGNOSTICO][StructureFusion] TotHZ={0} WithAnchors={1} DirBull={2} DirBear={3} DirNeutral={4}",
                 heatZones.Count, sfWithAnchors, sfBull, sfBear, sfNeutral));
+
+            // Resumen agregado del pipeline de StructureFusion cada N barras del TF de decisión
+            if (timeframeMinutes == _config.DecisionTimeframeMinutes)
+            {
+                int interval = Math.Max(1, _config.DiagnosticsInterval);
+                if ((currentBar % interval) == 0)
+                {
+                    _logger.Info(string.Format("[PIPE][SF] TF={0} Bar={1} Triggers={2} Anchors={3} HeatZones={4}",
+                        timeframeMinutes, currentBar, triggers.Count, anchors.Count, heatZones.Count));
+                }
+            }
         }
         
         /// <summary>
@@ -182,6 +209,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             List<StructureBase> triggersSame,
             List<StructureBase> anchors,
             IBarDataProvider barData,
+            DateTime analysisTime,
             int currentBar)
         {
             var heatZone = new HeatZone
@@ -268,7 +296,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 .Select(t => new {
                     Structure = t,
                     Weight = t.Score * (_config.TFWeights.ContainsKey(t.TF) ? _config.TFWeights[t.TF] : 1.0),
-                    Age = currentBar - t.CreatedAtBarIndex
+                    Age = Math.Max(0, (barData.GetBarIndexFromTime(t.TF, analysisTime) >= 0
+                        ? barData.GetBarIndexFromTime(t.TF, analysisTime)
+                        : int.MaxValue) - t.CreatedAtBarIndex)
                 })
                 .OrderByDescending(x => x.Weight)      // Primero: mejor Score × TFWeight
                 .ThenByDescending(x => x.Structure.TF) // Desempate: TF más alto

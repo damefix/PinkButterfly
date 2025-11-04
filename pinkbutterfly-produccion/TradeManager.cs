@@ -292,7 +292,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             }
 
             // REGLA 2: Caducidad por BOS/CHoCH contradictorio
-            if (CheckBOSContradictory(trade, coreEngine, barData, currentBar))
+            if (CheckBOSContradictory(trade, coreEngine, barData, currentBarTime))
             {
                 trade.Status = TradeStatus.CANCELLED;
                 trade.ExitBar = currentBar;
@@ -377,7 +377,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// <summary>
         /// Verifica si hay un BOS/CHoCH contradictorio a la orden
         /// </summary>
-        private bool CheckBOSContradictory(TradeRecord trade, CoreEngine coreEngine, IBarDataProvider barData, int currentBar)
+        private bool CheckBOSContradictory(TradeRecord trade, CoreEngine coreEngine, IBarDataProvider barData, DateTime currentBarTime)
         {
             // V5.6.6: Sesgo único con cálculo directo EMA200@60 para cancelaciones si está habilitado
             string currentBias = coreEngine.CurrentMarketBias;
@@ -386,7 +386,15 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 try
                 {
                     int tf = 60; // 1H
-                    int index60 = barData.GetCurrentBarIndex(tf);
+                    // Alinear por TIEMPO de la barra de decisión
+                    int index60 = barData.GetBarIndexFromTime(tf, currentBarTime);
+                    if (index60 < 0)
+                    {
+                        // Fallback defensivo si no hay match exacto
+                        // Alinear por tiempo de análisis (si está disponible via currentBarTime)
+                        index60 = barData.GetBarIndexFromTime(tf, currentBarTime);
+                    }
+
                     if (index60 >= 200)
                     {
                         double sum = 0.0;
@@ -401,6 +409,11 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                         else currentBias = "Neutral";
 
                         _logger.Info($"[DIAGNOSTICO][CancelBias] TF60 index={index60} Close={lastClose:F2} EMA200~={ema200approx:F2} Bias={currentBias}");
+                    }
+                    else
+                    {
+                        // Trazas ligeras para explicar por qué se omite la cancelación por falta de historial suficiente
+                        _logger.Info($"[DIAGNOSTICO][CancelBias] SKIP idx60={index60} (<200) time={currentBarTime:yyyy-MM-dd HH:mm}");
                     }
                 }
                 catch { /* si falla, mantener currentMarketBias */ }
