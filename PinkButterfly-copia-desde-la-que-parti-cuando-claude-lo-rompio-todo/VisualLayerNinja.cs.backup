@@ -1,0 +1,1087 @@
+// ============================================================================
+// VisualLayerNinja.cs
+// PinkButterfly CoreBrain - Capa Visual para NinjaTrader
+// 
+// Indicador NinjaScript que consume el DecisionEngine y visualiza:
+// - HeatZones (rectángulos con gradiente de color según score)
+// - Líneas de Entry, StopLoss, TakeProfit
+// - Panel lateral con Bias, Top Zones, y Rationale de la decisión
+//
+// Patrón: Observer/Consumer del DecisionEngine
+// Diseño: Minimalista, no saturar el gráfico, priorizar información crítica
+// ============================================================================
+
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Linq;
+using System.Windows.Media;
+using System.Xml.Serialization;
+using NinjaTrader.Cbi;
+using NinjaTrader.Gui;
+using NinjaTrader.Gui.Chart;
+using NinjaTrader.Gui.SuperDom;
+using NinjaTrader.Gui.Tools;
+using NinjaTrader.Data;
+using NinjaTrader.NinjaScript;
+using NinjaTrader.Core.FloatingPoint;
+using NinjaTrader.NinjaScript.DrawingTools;
+
+// Enum fuera del namespace para que NinjaTrader lo reconozca
+public enum LanguageOption
+{
+    English,
+    Spanish
+}
+
+namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
+{
+    /// <summary>
+    /// Capa Visual del PinkButterfly CoreBrain
+    /// Consume DecisionEngine y dibuja HeatZones, Entry/SL/TP, y panel lateral
+    /// </summary>
+    public class VisualLayerNinja : Indicator
+    {
+        #region Variables
+
+        private CoreEngine _coreEngine;
+        private DecisionEngine _decisionEngine;
+        private IBarDataProvider _barDataProvider;
+        private EngineConfig _config;
+        private ILogger _logger;
+        
+        private TradeDecision _lastDecision;
+        private List<HeatZone> _lastHeatZones;
+        
+        // ========================================================================
+        // GESTOR DE OPERACIONES (TradeManager)
+        // ========================================================================
+        private TradeManager _tradeManager;
+        
+        // Tags para dibujo (para poder removerlos después)
+        private const string TAG_HEATZONE = "HZ_";
+        private const string TAG_ENTRY = "ENTRY_";
+        private const string TAG_SL = "SL_";
+        private const string TAG_TP = "TP_";
+        private const string TAG_PANEL = "PANEL_";
+
+        #endregion
+
+        #region Properties (Configurables desde UI)
+
+        [NinjaScriptProperty]
+        [Display(Name = "Language / Idioma", Description = "Interface language / Idioma de la interfaz", Order = 0, GroupName = "General")]
+        public LanguageOption Language { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Account Size", Description = "Tamaño de cuenta para calcular position size", Order = 1, GroupName = "Risk Management")]
+        public double AccountSize { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Max Zones To Display", Description = "Número máximo de HeatZones a mostrar", Order = 2, GroupName = "Visual")]
+        [Range(1, 20)]
+        public int MaxZonesToDisplay { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Show Entry Lines", Description = "Mostrar líneas de Entry", Order = 3, GroupName = "Visual")]
+        public bool ShowEntryLines { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Show SL/TP Lines", Description = "Mostrar líneas de SL/TP", Order = 4, GroupName = "Visual")]
+        public bool ShowSLTPLines { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Show Panel", Description = "Mostrar panel lateral con información", Order = 5, GroupName = "Visual")]
+        public bool ShowPanel { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Zone Opacity", Description = "Opacidad de las HeatZones (0-100)", Order = 6, GroupName = "Visual")]
+        [Range(10, 100)]
+        public int ZoneOpacity { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Bullish Color", Description = "Color para zonas Bullish", Order = 7, GroupName = "Colors")]
+        public Brush BullishBrush { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Bearish Color", Description = "Color para zonas Bearish", Order = 8, GroupName = "Colors")]
+        public Brush BearishBrush { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Neutral Color", Description = "Color para zonas Neutral", Order = 9, GroupName = "Colors")]
+        public Brush NeutralBrush { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Entry Color", Description = "Color para líneas de Entry", Order = 10, GroupName = "Colors")]
+        public Brush EntryBrush { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "SL Color", Description = "Color para líneas de StopLoss", Order = 11, GroupName = "Colors")]
+        public Brush SLBrush { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "TP Color", Description = "Color para líneas de TakeProfit", Order = 12, GroupName = "Colors")]
+        public Brush TPBrush { get; set; }
+
+        // ========================================================================
+        // PARÁMETROS DE RENDIMIENTO Y CONTROL VISUAL
+        // ========================================================================
+
+        [NinjaScriptProperty]
+        [Display(Name = "Show All Heat Zones", Description = "Dibujar todas las HeatZones o solo las que generan señal", Order = 13, GroupName = "Performance")]
+        public bool ShowAllHeatZones { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Show Structural Levels", Description = "Mostrar niveles estructurales (BOS/CHoCH)", Order = 14, GroupName = "Performance")]
+        public bool ShowStructuralLevels { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Visual Bars Limit", Description = "Número máximo de barras para dibujar zonas (reduce carga gráfica)", Order = 15, GroupName = "Performance")]
+        [Range(100, 2000)]
+        public int VisualBarsLimit { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Min Visual Score", Description = "Score mínimo para dibujar una HeatZone (0.0 - 1.0)", Order = 16, GroupName = "Performance")]
+        [Range(0.0, 1.0)]
+        public double MinVisualScore { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Min Visual Height (ATR)", Description = "Altura mínima de zona como factor del ATR (ej: 0.2 = 20% del ATR)", Order = 17, GroupName = "Performance")]
+        [Range(0.0, 1.0)]
+        public double MinVisualHeightATR { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Show Heat Zones", Description = "Mostrar rectángulos de HeatZones", Order = 18, GroupName = "Visual Controls")]
+        public bool ShowHeatZones { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Show Entry Line", Description = "Mostrar línea de Entry", Order = 19, GroupName = "Visual Controls")]
+        public bool ShowEntryLine { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Show SL Line", Description = "Mostrar línea de Stop Loss", Order = 20, GroupName = "Visual Controls")]
+        public bool ShowSLLine { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Show TP Line", Description = "Mostrar línea de Take Profit", Order = 21, GroupName = "Visual Controls")]
+        public bool ShowTPLine { get; set; }
+
+        #endregion
+
+        #region NinjaScript Lifecycle
+
+        protected override void OnStateChange()
+        {
+            if (State == State.SetDefaults)
+            {
+                Description = @"PinkButterfly CoreBrain - Capa Visual";
+                Name = "VisualLayerNinja";
+                Calculate = Calculate.OnBarClose;
+                IsOverlay = true;
+                DisplayInDataBox = true;
+                DrawOnPricePanel = true;
+                DrawHorizontalGridLines = true;
+                DrawVerticalGridLines = true;
+                PaintPriceMarkers = true;
+                ScaleJustification = NinjaTrader.Gui.Chart.ScaleJustification.Right;
+                IsSuspendedWhileInactive = true;
+                
+                // Configurar output a Output Tab 2 (como el resto del sistema)
+                PrintTo = PrintTo.OutputTab2;
+
+                // Defaults
+                Language = LanguageOption.Spanish;
+                AccountSize = 100000;
+                MaxZonesToDisplay = 8;
+                ShowEntryLines = true;
+                ShowSLTPLines = true;
+                ShowPanel = true;
+                ZoneOpacity = 40;
+
+                // Colors
+                BullishBrush = Brushes.LimeGreen;
+                BearishBrush = Brushes.Red;
+                NeutralBrush = Brushes.Gray;
+                EntryBrush = Brushes.DodgerBlue;
+                SLBrush = Brushes.Crimson;
+                TPBrush = Brushes.Gold;
+
+                // Performance
+                ShowAllHeatZones = true;
+                ShowStructuralLevels = false;
+                VisualBarsLimit = 500;
+                MinVisualScore = 0.6; // Aumentado de 0.5 a 0.6
+                MinVisualHeightATR = 0.50; // Aumentado de 0.20 a 0.50 (50% del ATR mínimo)
+
+                // Visual Controls (HeatZones deshabilitadas por defecto para gráfico limpio)
+                ShowHeatZones = false; // Usuario puede habilitar si quiere ver las zonas
+                ShowEntryLine = true;
+                ShowSLLine = true;
+                ShowTPLine = true;
+            }
+            else if (State == State.Configure)
+            {
+                try
+                {
+                    Print("[VisualLayerNinja] State.Configure - Iniciando configuración MTF");
+                    
+                    var tempConfig = EngineConfig.LoadDefaults();
+                    int chartTF = Bars.BarsPeriod.Value; // TF del gráfico principal
+                    
+                    Print($"[VisualLayerNinja] TF del gráfico principal: {chartTF}m");
+                    Print($"[VisualLayerNinja] TFs configurados en Core: {string.Join(", ", tempConfig.TimeframesToUse)}");
+                    
+                    // Verificar si el TF del gráfico está en la configuración del Core
+                    bool chartTFInCore = tempConfig.TimeframesToUse.Contains(chartTF);
+                    
+                    if (!chartTFInCore)
+                    {
+                        Print($"[VisualLayerNinja] ADVERTENCIA: TF {chartTF}m NO está en TimeframesToUse del Core");
+                        Print($"[VisualLayerNinja] El gráfico se actualizará a {chartTF}m, pero el análisis usará los TFs configurados");
+                    }
+                    
+                    // Agregar DataSeries para cada TF configurado (Multi-Timeframe)
+                    // Solo añadir los que NO son el TF principal del gráfico
+                    foreach (int tfMinutes in tempConfig.TimeframesToUse)
+                    {
+                        if (tfMinutes == chartTF)
+                        {
+                            Print($"[VisualLayerNinja] Saltando TF {tfMinutes}m (es el TF principal)");
+                            continue;
+                        }
+                        
+                        AddDataSeries(Instrument.FullName, new BarsPeriod 
+                        { 
+                            BarsPeriodType = BarsPeriodType.Minute, 
+                            Value = tfMinutes 
+                        });
+                        Print($"[VisualLayerNinja] DataSeries agregada para TF {tfMinutes}m");
+                    }
+                    
+                    Print("[VisualLayerNinja] State.Configure completado");
+                }
+                catch (Exception ex)
+                {
+                    Print($"[VisualLayerNinja] ERROR en State.Configure: {ex.Message}");
+                    Print($"Stack: {ex.StackTrace}");
+                }
+            }
+            else if (State == State.DataLoaded)
+            {
+                try
+                {
+                    Print("[VisualLayerNinja] State.DataLoaded - Iniciando inicialización");
+                    
+                    // Inicializar logger
+                    _logger = new NinjaTraderLogger(this, LogLevel.Info);
+                    Print("[VisualLayerNinja] Logger inicializado");
+
+                    // Cargar configuración
+                    _config = EngineConfig.LoadDefaults();
+                    Print("[VisualLayerNinja] Configuración cargada");
+
+                    // Crear provider
+                    _barDataProvider = new NinjaTraderBarDataProvider(this);
+                    Print("[VisualLayerNinja] BarDataProvider creado");
+
+                    // Inicializar CoreEngine
+                    _coreEngine = new CoreEngine(_barDataProvider, _config, _logger);
+                    _coreEngine.Initialize();
+                    Print("[VisualLayerNinja] CoreEngine inicializado");
+
+                    // Inicializar DecisionEngine
+                    _decisionEngine = new DecisionEngine(_config, _logger);
+                    Print("[VisualLayerNinja] DecisionEngine inicializado");
+
+                    // Inicializar TradeManager
+                    _tradeManager = new TradeManager(_config, _logger);
+                    Print("[VisualLayerNinja] TradeManager inicializado");
+
+                    // Inicializar variables
+                    _lastHeatZones = new List<HeatZone>();
+                    
+                    Print("[VisualLayerNinja] State.DataLoaded completado exitosamente");
+                }
+                catch (Exception ex)
+                {
+                    Print($"[VisualLayerNinja] ERROR en inicialización: {ex.Message}");
+                    Print($"Stack: {ex.StackTrace}");
+                }
+            }
+            else if (State == State.Terminated)
+            {
+                // Cleanup
+                if (_coreEngine != null)
+                {
+                    _coreEngine.Dispose();
+                    _coreEngine = null;
+                }
+            }
+        }
+
+        protected override void OnBarUpdate()
+        {
+            try
+            {
+                // 1. Identificar qué TF se actualizó usando BarsInProgress
+                int barsInProgressIndex = BarsInProgress;
+                
+                // 2. Obtener el TF en minutos del BarsArray que se actualizó
+                BarsPeriod period = BarsArray[barsInProgressIndex].BarsPeriod;
+                int tfMinutes = GetMinutesFromBarsPeriod(period);
+                
+                // 3. Obtener el índice de barra correcto para ESE TF
+                int barIndex = CurrentBars[barsInProgressIndex];
+                
+                // 4. Verificar que este TF tenga suficientes datos (al menos 20 barras)
+                if (barIndex < 20)
+                    return;
+                
+                // 5. Control de carga histórica: solo procesar las últimas N barras
+                int totalBars = BarsArray[barsInProgressIndex].Count;
+                int barsToSkip = totalBars - _config.BacktestBarsForAnalysis;
+                
+                if (State == State.Historical && barIndex < barsToSkip)
+                {
+                    // Saltar barras antiguas en histórico para acelerar la carga
+                    return;
+                }
+                
+                // 6. Control de logging: solo loggear las últimas N barras del histórico
+                bool enableLogging = (State == State.Realtime) || 
+                                    (barIndex >= totalBars - _config.LoggingThresholdBars);
+                
+                if (barIndex == barsToSkip && State == State.Historical)
+                {
+                    Print($"[VisualLayerNinja] Iniciando procesamiento histórico desde barra {barIndex}/{totalBars} (TF {tfMinutes}m)");
+                }
+                
+                // 7. CRÍTICO: Solo llamar a CoreEngine.OnBarClose si el TF está en TimeframesToUse
+                // Esto protege la integridad del scoring y análisis MTF
+                if (_config.TimeframesToUse.Contains(tfMinutes))
+                {
+                    _coreEngine.OnBarClose(tfMinutes, barIndex);
+                    
+                    if (enableLogging)
+                        _logger.Debug($"[VisualLayerNinja] OnBarClose({tfMinutes}m, bar {barIndex}) - BarsInProgress: {barsInProgressIndex}");
+                }
+                else if (barsInProgressIndex == 0)
+                {
+                    // Este es el TF del gráfico, pero NO está en TimeframesToUse
+                    // Solo usarlo para dibujar, NO para análisis
+                    if (enableLogging)
+                        _logger.Debug($"[VisualLayerNinja] TF {tfMinutes}m (gráfico) - Solo dibujo, no análisis");
+                }
+
+                // 8. Solo en el TF principal (BarsInProgress == 0), generar decisión y dibujar
+                // El análisis usa el TF más bajo de TimeframesToUse, no necesariamente el del gráfico
+                if (BarsInProgress == 0 && barIndex >= 20)
+                {
+                    if (enableLogging)
+                        _logger.Debug($"[VisualLayerNinja] Generando decisión para BarIndex: {barIndex}");
+                    
+                    // Usar el TF más bajo de TimeframesToUse como referencia para el análisis
+                    int lowestTF = _config.TimeframesToUse.Min();
+                    int analysisBarIndex = _barDataProvider.GetCurrentBarIndex(lowestTF);
+                    
+                    // Generar decisión con DecisionEngine usando el barIndex del TF de análisis
+                    _lastDecision = _decisionEngine.GenerateDecision(_barDataProvider, _coreEngine, analysisBarIndex, AccountSize);
+
+                    // LOG DETALLADO DE LA DECISIÓN (valores SL/TP)
+                    if (_lastDecision != null && enableLogging)
+                    {
+                        double rr = _lastDecision.StopLoss > 0 ? Math.Abs(_lastDecision.TakeProfit - _lastDecision.Entry) / Math.Abs(_lastDecision.Entry - _lastDecision.StopLoss) : 0;
+                        _logger.Debug($"[VisualLayerNinja] *** DECISIÓN *** Action={_lastDecision.Action}, Entry={_lastDecision.Entry:F2}, SL={_lastDecision.StopLoss:F2}, TP={_lastDecision.TakeProfit:F2}, Conf={_lastDecision.Confidence:F3}, R:R={rr:F2}");
+                    }
+
+                    // TRACKING DE OPERACIÓN ACTIVA
+                    ProcessTradeTracking();
+
+                    // Obtener HeatZones del snapshot
+                    _lastHeatZones = GetTopHeatZones();
+
+                    // Dibujar visualización
+                    DrawVisualization();
+                }
+            }
+            catch (Exception ex)
+            {
+                Print($"[VisualLayerNinja] ERROR en OnBarUpdate: {ex.Message}");
+                Print($"Stack: {ex.StackTrace}");
+                _logger.Error($"[VisualLayerNinja] Error en OnBarUpdate: {ex.Message}");
+                _logger.Exception("OnBarUpdate exception", ex);
+            }
+        }
+
+        /// <summary>
+        /// Procesa el tracking de operaciones usando TradeManager
+        /// </summary>
+        private void ProcessTradeTracking()
+        {
+            if (_lastDecision == null)
+                return;
+
+            // PASO 1: Actualizar estado de todas las órdenes activas
+            double currentPrice = Close[0];
+            _tradeManager.UpdateTrades(High[0], Low[0], CurrentBar, currentPrice, _coreEngine, _barDataProvider);
+
+            // PASO 2: Si llega una NUEVA señal BUY/SELL, registrarla
+            bool isNewSignal = (_lastDecision.Action == "BUY" || _lastDecision.Action == "SELL");
+            if (isNewSignal)
+            {
+                // Obtener el TF dominante de la última HeatZone (si existe)
+                int tfDominante = _lastHeatZones != null && _lastHeatZones.Count > 0 
+                    ? _lastHeatZones[0].TFDominante 
+                    : _config.TimeframesToUse.Min();
+
+                // Obtener el DominantStructureId de la decisión
+                string sourceStructureId = _lastDecision.DominantStructureId ?? string.Empty;
+
+                _tradeManager.RegisterTrade(
+                    _lastDecision.Action,
+                    _lastDecision.Entry,
+                    _lastDecision.StopLoss,
+                    _lastDecision.TakeProfit,
+                    CurrentBar,
+                    tfDominante,
+                    sourceStructureId
+                );
+            }
+        }
+
+        /// <summary>
+        /// Convierte un BarsPeriod a minutos
+        /// </summary>
+        private int GetMinutesFromBarsPeriod(BarsPeriod period)
+        {
+            switch (period.BarsPeriodType)
+            {
+                case BarsPeriodType.Minute:
+                    return period.Value;
+                case BarsPeriodType.Day:
+                    return period.Value * 1440;
+                case BarsPeriodType.Week:
+                    return period.Value * 10080;
+                case BarsPeriodType.Month:
+                    return period.Value * 43200;
+                default:
+                    // Para otros tipos (Tick, Volume, Range, etc.), usar el TF principal
+                    _logger.Warning($"[VisualLayerNinja] BarsPeriodType {period.BarsPeriodType} no soportado para MTF, usando TF principal");
+                    return Bars.BarsPeriod.Value;
+            }
+        }
+
+        #endregion
+
+        #region Helper Methods
+
+        /// <summary>
+        /// Obtiene las top HeatZones desde el CoreEngine
+        /// Filtra por score mínimo y prioriza estructuras de alto nivel
+        /// </summary>
+        private List<HeatZone> GetTopHeatZones()
+        {
+            var zones = new List<HeatZone>();
+
+            try
+            {
+                // FILTRO CRÍTICO 1: Solo estructuras dentro del rango visual (VisualBarsLimit)
+                DateTime oldestVisibleTime = Time[0].AddMinutes(-VisualBarsLimit * Bars.BarsPeriod.Value);
+                
+                // FILTRO CRÍTICO 2: Score mínimo configurable
+                double minScoreThreshold = MinVisualScore;
+                
+                // FILTRO CRÍTICO 3: Tamaño mínimo en ATR (elimina micro-estructuras)
+                double atr = _barDataProvider.GetATR(_config.TimeframesToUse.Min(), 14, CurrentBar);
+                double minHeightPrice = atr * MinVisualHeightATR;
+                
+                // FILTRO CRÍTICO 4: Priorizar tipos de alta jerarquía (NO dibujar Swings individuales)
+                var priorityTypes = new HashSet<string> { "OrderBlockInfo", "PointOfInterestInfo", "StructureBreakInfo", "FairValueGapInfo", "LiquidityGrabInfo", "LiquidityVoidInfo" };
+                
+                // ESTRATEGIA RADICAL: Obtener TODAS las estructuras válidas de TODOS los TFs
+                // y luego seleccionar solo las TOP 3-5 GLOBALES (no por TF)
+                var allValidStructures = new List<StructureBase>();
+                
+                foreach (int tf in _config.TimeframesToUse)
+                {
+                    var structures = _coreEngine.GetAllStructures(tf)
+                        .Where(s => s.IsActive 
+                                 && s.Score >= minScoreThreshold
+                                 && s.EndTime >= oldestVisibleTime
+                                 && priorityTypes.Contains(s.GetType().Name)
+                                 && (s.High - s.Low) >= minHeightPrice)
+                        .ToList();
+                    
+                    allValidStructures.AddRange(structures);
+                }
+
+                // Ordenar por Score GLOBAL y tomar solo las TOP N
+                int maxZonesToDraw = Math.Min(3, MaxZonesToDisplay); // MÁXIMO 3 ZONAS EN EL GRÁFICO
+                
+                var topStructures = allValidStructures
+                    .OrderByDescending(s => s.Score)
+                    .Take(maxZonesToDraw)
+                    .ToList();
+
+                foreach (var structure in topStructures)
+                {
+                    var zone = new HeatZone
+                    {
+                        Id = structure.Id,
+                        Direction = GetStructureDirection(structure),
+                        High = structure.High,
+                        Low = structure.Low,
+                        Score = structure.Score,
+                        ConfluenceCount = 1,
+                        DominantType = structure.Type,
+                        TFDominante = structure.TF
+                    };
+                    zone.SourceStructureIds.Add(structure.Id);
+                    zones.Add(zone);
+                }
+
+                // FILTRO CRÍTICO 4: Eliminar zonas solapadas (>80% overlap)
+                zones = RemoveOverlappingZones(zones);
+
+                // Ordenar por TF (bajo primero) para Z-Order: TFs altos se dibujan encima
+                zones = zones.OrderBy(z => z.TFDominante).ToList();
+                
+                _logger.Debug($"[VisualLayerNinja] {zones.Count} HeatZones obtenidas (filtradas por score >= {minScoreThreshold}, rango: {VisualBarsLimit} barras)");
+            }
+            catch (Exception ex)
+            {
+                _logger.Error($"[VisualLayerNinja] Error obteniendo HeatZones: {ex.Message}");
+            }
+
+            return zones;
+        }
+
+        /// <summary>
+        /// Elimina zonas que se solapan más del 80% (consolidación)
+        /// Mantiene solo la zona con mayor score
+        /// </summary>
+        private List<HeatZone> RemoveOverlappingZones(List<HeatZone> zones)
+        {
+            var result = new List<HeatZone>();
+            var processed = new HashSet<string>();
+
+            foreach (var zone in zones.OrderByDescending(z => z.Score))
+            {
+                if (processed.Contains(zone.Id))
+                    continue;
+
+                bool hasSignificantOverlap = false;
+
+                foreach (var existing in result)
+                {
+                    double overlapPercentage = CalculateOverlap(zone, existing);
+                    if (overlapPercentage > 0.8) // 80% overlap
+                    {
+                        hasSignificantOverlap = true;
+                        break;
+                    }
+                }
+
+                if (!hasSignificantOverlap)
+                {
+                    result.Add(zone);
+                }
+
+                processed.Add(zone.Id);
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Calcula el porcentaje de solapamiento entre dos zonas (0.0 - 1.0)
+        /// </summary>
+        private double CalculateOverlap(HeatZone zone1, HeatZone zone2)
+        {
+            double overlapHigh = Math.Min(zone1.High, zone2.High);
+            double overlapLow = Math.Max(zone1.Low, zone2.Low);
+
+            if (overlapLow >= overlapHigh)
+                return 0.0; // No hay solapamiento
+
+            double overlapSize = overlapHigh - overlapLow;
+            double zone1Size = zone1.High - zone1.Low;
+            double zone2Size = zone2.High - zone2.Low;
+            double minSize = Math.Min(zone1Size, zone2Size);
+
+            return overlapSize / minSize;
+        }
+
+        /// <summary>
+        /// Obtiene la dirección de una estructura (Bullish/Bearish/Neutral)
+        /// </summary>
+        private string GetStructureDirection(StructureBase structure)
+        {
+            if (structure is FVGInfo fvg)
+                return fvg.Direction;
+            else if (structure is OrderBlockInfo ob)
+                return ob.Direction;
+            else if (structure is StructureBreakInfo sb)
+                return sb.Direction;
+            else if (structure is LiquidityGrabInfo lg)
+                return lg.DirectionalBias; // LG usa DirectionalBias en lugar de Direction
+            else if (structure is SwingInfo swing)
+                return swing.IsHigh ? "Bearish" : "Bullish"; // Swing High = resistencia (bearish), Swing Low = soporte (bullish)
+            else
+                return "Neutral";
+        }
+
+        #endregion
+
+        #region Drawing Methods
+
+        /// <summary>
+        /// Dibuja toda la visualización: HeatZones, Entry/SL/TP, Panel
+        /// </summary>
+        private void DrawVisualization()
+        {
+            // IMPORTANTE: NO borrar todos los objetos, solo los de HeatZones y Panel
+            // Las líneas de Entry/SL/TP se mantienen hasta que la operación se cierre
+            
+            // Limpiar solo HeatZones de la barra anterior
+            for (int i = 0; i < MaxZonesToDisplay; i++)
+            {
+                RemoveDrawObject(TAG_HEATZONE + (CurrentBar - 1) + "_" + i);
+                RemoveDrawObject(TAG_HEATZONE + (CurrentBar - 1) + "_" + i + "_LABEL");
+            }
+
+            // 1. Dibujar HeatZones (control independiente)
+            if (ShowHeatZones)
+                DrawHeatZones();
+
+            // 2. Dibujar líneas de Entry/SL/TP para TODAS las operaciones del historial
+            if (ShowEntryLine)
+                DrawEntryLine();
+            
+            if (ShowSLLine)
+                DrawSLLine();
+                
+            if (ShowTPLine)
+                DrawTPLine();
+
+            // 3. Dibujar panel lateral
+            if (ShowPanel)
+                DrawPanel();
+        }
+
+        /// <summary>
+        /// Dibuja las HeatZones como rectángulos con gradiente de color
+        /// </summary>
+        private void DrawHeatZones()
+        {
+            if (_lastHeatZones == null || _lastHeatZones.Count == 0)
+            {
+                _logger.Debug("[VisualLayerNinja] No hay HeatZones para dibujar");
+                return;
+            }
+
+            _logger.Debug($"[VisualLayerNinja] Dibujando {_lastHeatZones.Count} HeatZones");
+
+            int zoneIndex = 0;
+            foreach (var zone in _lastHeatZones)
+            {
+                try
+                {
+                    // COLORES PROFESIONALES: Liquidez = Gris, Decisión = Verde/Rojo
+                    Color baseColor;
+                    
+                    // Liquidez (LG/LV) = Gris/Blanco (no son zonas direccionales)
+                    if (zone.DominantType.Contains("Liquidity"))
+                    {
+                        baseColor = Color.FromRgb(180, 180, 180); // Gris claro
+                    }
+                    // Zonas de Decisión (FVG/OB/POI/BOS) = Verde/Rojo según dirección
+                    else if (zone.Direction == "Bullish")
+                    {
+                        baseColor = Color.FromRgb(0, 150, 0); // Verde suave
+                    }
+                    else if (zone.Direction == "Bearish")
+                    {
+                        baseColor = Color.FromRgb(150, 0, 0); // Rojo suave
+                    }
+                    else
+                    {
+                        baseColor = Color.FromRgb(100, 100, 100); // Gris neutro
+                    }
+
+                    // OPACIDAD INTELIGENTE: Umbral mínimo para evitar "fantasmas"
+                    // Alpha = Max(50, score * 150) para que zonas débiles sean casi invisibles
+                    int alpha = Math.Max(50, (int)(zone.Score * 150));
+                    alpha = Math.Min(200, alpha); // Cap en 200 (no 255) para evitar opacidad total
+
+                    Color finalColor = Color.FromArgb((byte)alpha, baseColor.R, baseColor.G, baseColor.B);
+                    Brush zoneBrush = new SolidColorBrush(finalColor);
+                    zoneBrush.Freeze();
+
+                    // Dibujar rectángulo extendido hacia la izquierda (histórico visible)
+                    string tag = TAG_HEATZONE + CurrentBar + "_" + zoneIndex;
+                    
+                    // Calcular cuántas barras atrás dibujar (usar el límite visual)
+                    int startBarsAgo = Math.Min(VisualBarsLimit, CurrentBar);
+                    int endBarsAgo = 0; // Extender hasta el presente
+                    
+                    Draw.Rectangle(this, tag, false,
+                        startBarsAgo, zone.Low,
+                        endBarsAgo, zone.High,
+                        Brushes.Transparent, zoneBrush, 0);
+
+                    // Label simplificado: Solo tipo y TF (el score ya está en la opacidad)
+                    string typeShort = zone.DominantType.Replace("Info", "").Replace("OrderBlock", "OB")
+                                                         .Replace("PointOfInterest", "POI")
+                                                         .Replace("FairValueGap", "FVG")
+                                                         .Replace("StructureBreak", "BOS")
+                                                         .Replace("LiquidityGrab", "LG");
+                    
+                    string label = $"{typeShort} {zone.TFDominante}m | {zone.Score:F2}";
+                    
+                    Draw.Text(this, tag + "_LABEL", label,
+                        startBarsAgo / 2, zone.CenterPrice,
+                        Brushes.White);
+
+                    _logger.Debug($"[VisualLayerNinja] HeatZone dibujada: {tag} @ {zone.Low:F2}-{zone.High:F2}, Score: {zone.Score:F2}");
+                    zoneIndex++;
+                }
+                catch (Exception ex)
+                {
+                    _logger.Error($"[VisualLayerNinja] Error dibujando HeatZone {zone.Id}: {ex.Message}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Dibuja las líneas de Entry para TODAS las operaciones
+        /// - Operaciones EJECUTADAS/CERRADAS: desde ExecutionBar hasta ExitBar
+        /// - Operaciones PENDIENTES: desde CurrentBar hacia el futuro (abanico)
+        /// </summary>
+        private void DrawEntryLine()
+        {
+            try
+            {
+                var allTrades = _tradeManager.GetAllTrades();
+                var pendingTrades = allTrades.Where(t => t.Status == TradeStatus.PENDING).OrderBy(t => Math.Abs(t.Entry - Close[0])).ToList();
+                
+                // PARTE 1: Dibujar órdenes EJECUTADAS o CERRADAS (historial)
+                foreach (var trade in allTrades.Where(t => t.Status != TradeStatus.PENDING))
+                {
+                    if (trade.Entry <= 0 || trade.ExecutionBar == -1)
+                        continue;
+                    
+                    int startBarsAgo = CurrentBar - trade.ExecutionBar;
+                    int endBarsAgo = trade.ExitBar > 0 ? CurrentBar - trade.ExitBar : 0;
+                    
+                    string tag = TAG_ENTRY + trade.Id;
+                    string label = $"E: {trade.Entry:F2}";
+                    
+                    Draw.Line(this, tag, true, startBarsAgo, trade.Entry, endBarsAgo, trade.Entry, 
+                        EntryBrush, DashStyleHelper.Solid, 2);
+                    
+                    Draw.Text(this, tag + "_LABEL", label,
+                        startBarsAgo, trade.Entry + (2 * TickSize),
+                        EntryBrush);
+                }
+                
+                // PARTE 2: Dibujar órdenes PENDIENTES en panel lateral fijo
+                // Agrupar por precio para evitar solapamiento y ordenar por proximidad al precio actual
+                var currentPrice = Close[0];
+                var groupedPending = pendingTrades
+                    .GroupBy(t => Math.Round(t.Entry, 2))
+                    .Select(g => new { 
+                        Entry = g.Key, 
+                        Action = g.First().Action,
+                        Count = g.Count(),
+                        Distance = Math.Abs(g.Key - currentPrice)
+                    })
+                    .OrderBy(g => g.Distance) // Ordenar por proximidad (más cercana primero)
+                    .ToList();
+                
+                // Dibujar panel de órdenes pendientes usando TextFixed (panel lateral)
+                if (groupedPending.Count > 0)
+                {
+                    // Construir texto del panel
+                    System.Text.StringBuilder panelText = new System.Text.StringBuilder();
+                    panelText.AppendLine("═══ ÓRDENES PENDIENTES ═══");
+                    panelText.AppendLine($"Precio Actual: {currentPrice:F2}");
+                    panelText.AppendLine("─────────────────────────");
+                    
+                    foreach (var group in groupedPending)
+                    {
+                        string action = group.Action == "BUY" ? "BUY " : "SELL";
+                        string countStr = group.Count > 1 ? $"({group.Count}x) " : "";
+                        double dist = group.Entry - currentPrice;
+                        string distStr = dist > 0 ? $"+{dist:F2}" : $"{dist:F2}";
+                        
+                        panelText.AppendLine($"{action} {countStr}@ {group.Entry:F2} [{distStr}]");
+                    }
+                    
+                    // Dibujar panel fijo en la esquina superior derecha
+                    Draw.TextFixed(this, "PENDING_ORDERS_PANEL", panelText.ToString(),
+                        TextPosition.TopRight, 
+                        Brushes.White, 
+                        new SimpleFont("Courier New", 10), 
+                        Brushes.Transparent, 
+                        Brushes.DarkSlateGray, 
+                        100);
+                    
+                    // Dibujar líneas horizontales para cada orden (opcional, para referencia visual)
+                    foreach (var group in groupedPending)
+                    {
+                        string tag = TAG_ENTRY + "PENDING_LINE_" + group.Entry.ToString("F2").Replace(".", "_");
+                        Brush brush = group.Action == "BUY" ? Brushes.LimeGreen : Brushes.Red;
+                        
+                        // Línea horizontal corta en las últimas 5 barras
+                        Draw.Line(this, tag, true, 5, group.Entry, 0, group.Entry, 
+                            brush, DashStyleHelper.Dash, 1);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Error($"[VisualLayerNinja] Error dibujando Entry: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Dibuja la línea de StopLoss (desde barra de entrada hasta barra actual o salida)
+        /// </summary>
+        private void DrawSLLine()
+        {
+            try
+            {
+                var allTrades = _tradeManager.GetAllTrades();
+                
+                // Solo dibujar SL para órdenes EJECUTADAS (no pendientes)
+                foreach (var trade in allTrades.Where(t => t.Status != TradeStatus.PENDING && t.Status != TradeStatus.CANCELLED))
+                {
+                    if (trade.SL <= 0 || trade.ExecutionBar == -1)
+                        continue;
+                    
+                    int startBarsAgo = CurrentBar - trade.ExecutionBar;
+                    int endBarsAgo = trade.ExitBar > 0 ? CurrentBar - trade.ExitBar : 0;
+                    
+                    string tag = TAG_SL + trade.Id;
+                    string label = $"SL: {trade.SL:F2}";
+                    
+                    Draw.Line(this, tag, true, startBarsAgo, trade.SL, endBarsAgo, trade.SL, 
+                        SLBrush, DashStyleHelper.Dash, 2);
+                    
+                    Draw.Text(this, tag + "_LABEL", label,
+                        startBarsAgo, trade.SL + (2 * TickSize),
+                        SLBrush);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Error($"[VisualLayerNinja] Error dibujando SL: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Dibuja las líneas de TakeProfit para TODAS las operaciones ejecutadas
+        /// </summary>
+        private void DrawTPLine()
+        {
+            try
+            {
+                var allTrades = _tradeManager.GetAllTrades();
+                
+                // Solo dibujar TP para órdenes EJECUTADAS (no pendientes)
+                foreach (var trade in allTrades.Where(t => t.Status != TradeStatus.PENDING && t.Status != TradeStatus.CANCELLED))
+                {
+                    if (trade.TP <= 0 || trade.ExecutionBar == -1)
+                        continue;
+                    
+                    int startBarsAgo = CurrentBar - trade.ExecutionBar;
+                    int endBarsAgo = trade.ExitBar > 0 ? CurrentBar - trade.ExitBar : 0;
+                    
+                    string tag = TAG_TP + trade.Id;
+                    string label = $"TP: {trade.TP:F2}";
+                    
+                    Draw.Line(this, tag, true, startBarsAgo, trade.TP, endBarsAgo, trade.TP, 
+                        TPBrush, DashStyleHelper.Dash, 2);
+                    
+                    Draw.Text(this, tag + "_LABEL", label,
+                        startBarsAgo, trade.TP + (2 * TickSize),
+                        TPBrush);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Error($"[VisualLayerNinja] Error dibujando TP: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Dibuja el panel lateral con información del mercado y la decisión
+        /// </summary>
+        private void DrawPanel()
+        {
+            try
+            {
+                bool isSpanish = Language == LanguageOption.Spanish;
+                
+                // Construir texto del panel con formato profesional
+                var panelText = new System.Text.StringBuilder();
+                panelText.AppendLine("=== PINKBUTTERFLY COREBRAIN ===");
+                panelText.AppendLine();
+
+                // Bias global con emoji para claridad visual
+                string bias = _coreEngine.CurrentMarketBias;
+                string biasEmoji = bias == "Bullish" ? "🟢" : bias == "Bearish" ? "🔴" : "⚪";
+                string biasLabel = isSpanish ? "Sesgo Global" : "Global Bias";
+                panelText.AppendLine($"{biasLabel}: {biasEmoji} {bias}");
+                panelText.AppendLine();
+
+                // Última decisión con formato limpio
+                if (_lastDecision != null && _lastDecision.Confidence > 0)
+                {
+                    string actionLabel = isSpanish ? "Acción" : "Action";
+                    string confidenceLabel = isSpanish ? "Confianza" : "Confidence";
+                    
+                    // Formato: "Acción: WAIT, Confianza: 61%"
+                    panelText.AppendLine($"{actionLabel}: {_lastDecision.Action}");
+                    panelText.AppendLine($"{confidenceLabel}: {(_lastDecision.Confidence * 100):F0}%");
+                    
+                    if (_lastDecision.Action != "WAIT" && _lastDecision.Entry > 0)
+                    {
+                        string entryLabel = isSpanish ? "Entrada" : "Entry";
+                        string sizeLabel = isSpanish ? "Tamaño" : "Size";
+                        string contractsLabel = isSpanish ? "contratos" : "contracts";
+                        
+                        panelText.AppendLine();
+                        panelText.AppendLine($"{entryLabel}: {_lastDecision.Entry:F2}");
+                        panelText.AppendLine($"SL: {_lastDecision.StopLoss:F2}");
+                        panelText.AppendLine($"TP: {_lastDecision.TakeProfit:F2}");
+                        panelText.AppendLine($"{sizeLabel}: {_lastDecision.PositionSizeContracts:F0} {contractsLabel}");
+                    }
+                    
+                    panelText.AppendLine();
+                    
+                    // Rationale simplificado: Solo la primera línea (resumen)
+                    if (!string.IsNullOrEmpty(_lastDecision.Rationale))
+                    {
+                        var firstLine = _lastDecision.Rationale.Split('\n').FirstOrDefault();
+                        if (!string.IsNullOrWhiteSpace(firstLine))
+                        {
+                            // Eliminar el prefijo "- " si existe
+                            string cleanLine = firstLine.Trim().TrimStart('-').Trim();
+                            panelText.AppendLine(cleanLine);
+                        }
+                    }
+                }
+                else
+                {
+                    string actionLabel = isSpanish ? "Acción" : "Action";
+                    string noDecisionLabel = isSpanish ? "No hay oportunidad de trading clara" : "No clear trading opportunity";
+                    panelText.AppendLine($"{actionLabel}: WAIT");
+                    panelText.AppendLine($"{noDecisionLabel}");
+                }
+
+                panelText.AppendLine();
+                string zonesLabel = isSpanish ? "Zonas Top" : "Top Zones";
+                string barLabel = isSpanish ? "Barra" : "Bar";
+                panelText.AppendLine($"{zonesLabel}: {_lastHeatZones.Count}");
+                panelText.AppendLine($"{barLabel}: {CurrentBar}");
+
+                // Dibujar texto en esquina superior derecha
+                string tag = TAG_PANEL + "MAIN";
+                Draw.TextFixed(this, tag, panelText.ToString(),
+                    TextPosition.TopRight,
+                    ChartControl.Properties.ChartText,
+                    new Gui.Tools.SimpleFont("Arial", 10),
+                    Brushes.White,
+                    Brushes.Black,
+                    80);
+            }
+            catch (Exception ex)
+            {
+                _logger.Error($"[VisualLayerNinja] Error dibujando Panel: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Remueve objetos de dibujo de barras anteriores para evitar saturación
+        /// </summary>
+        private void RemoveDrawObjects(int bar)
+        {
+            try
+            {
+                // Remover objetos de barras antiguas (más de 100 barras atrás)
+                if (bar > 100)
+                {
+                    RemoveDrawObject(TAG_ENTRY + (bar - 100));
+                    RemoveDrawObject(TAG_SL + (bar - 100));
+                    RemoveDrawObject(TAG_TP + (bar - 100));
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Error($"[VisualLayerNinja] Error removiendo objetos: {ex.Message}");
+            }
+        }
+
+        #endregion
+    }
+}
+
+#region NinjaScript generated code. Neither change nor remove.
+
+namespace NinjaTrader.NinjaScript.Indicators
+{
+	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
+	{
+		private PinkButterfly.VisualLayerNinja[] cacheVisualLayerNinja;
+		public PinkButterfly.VisualLayerNinja VisualLayerNinja(LanguageOption language, double accountSize, int maxZonesToDisplay, bool showEntryLines, bool showSLTPLines, bool showPanel, int zoneOpacity, Brush bullishBrush, Brush bearishBrush, Brush neutralBrush, Brush entryBrush, Brush sLBrush, Brush tPBrush, bool showAllHeatZones, bool showStructuralLevels, int visualBarsLimit, double minVisualScore, double minVisualHeightATR, bool showHeatZones, bool showEntryLine, bool showSLLine, bool showTPLine)
+		{
+			return VisualLayerNinja(Input, language, accountSize, maxZonesToDisplay, showEntryLines, showSLTPLines, showPanel, zoneOpacity, bullishBrush, bearishBrush, neutralBrush, entryBrush, sLBrush, tPBrush, showAllHeatZones, showStructuralLevels, visualBarsLimit, minVisualScore, minVisualHeightATR, showHeatZones, showEntryLine, showSLLine, showTPLine);
+		}
+
+		public PinkButterfly.VisualLayerNinja VisualLayerNinja(ISeries<double> input, LanguageOption language, double accountSize, int maxZonesToDisplay, bool showEntryLines, bool showSLTPLines, bool showPanel, int zoneOpacity, Brush bullishBrush, Brush bearishBrush, Brush neutralBrush, Brush entryBrush, Brush sLBrush, Brush tPBrush, bool showAllHeatZones, bool showStructuralLevels, int visualBarsLimit, double minVisualScore, double minVisualHeightATR, bool showHeatZones, bool showEntryLine, bool showSLLine, bool showTPLine)
+		{
+			if (cacheVisualLayerNinja != null)
+				for (int idx = 0; idx < cacheVisualLayerNinja.Length; idx++)
+					if (cacheVisualLayerNinja[idx] != null && cacheVisualLayerNinja[idx].Language == language && cacheVisualLayerNinja[idx].AccountSize == accountSize && cacheVisualLayerNinja[idx].MaxZonesToDisplay == maxZonesToDisplay && cacheVisualLayerNinja[idx].ShowEntryLines == showEntryLines && cacheVisualLayerNinja[idx].ShowSLTPLines == showSLTPLines && cacheVisualLayerNinja[idx].ShowPanel == showPanel && cacheVisualLayerNinja[idx].ZoneOpacity == zoneOpacity && cacheVisualLayerNinja[idx].BullishBrush == bullishBrush && cacheVisualLayerNinja[idx].BearishBrush == bearishBrush && cacheVisualLayerNinja[idx].NeutralBrush == neutralBrush && cacheVisualLayerNinja[idx].EntryBrush == entryBrush && cacheVisualLayerNinja[idx].SLBrush == sLBrush && cacheVisualLayerNinja[idx].TPBrush == tPBrush && cacheVisualLayerNinja[idx].ShowAllHeatZones == showAllHeatZones && cacheVisualLayerNinja[idx].ShowStructuralLevels == showStructuralLevels && cacheVisualLayerNinja[idx].VisualBarsLimit == visualBarsLimit && cacheVisualLayerNinja[idx].MinVisualScore == minVisualScore && cacheVisualLayerNinja[idx].MinVisualHeightATR == minVisualHeightATR && cacheVisualLayerNinja[idx].ShowHeatZones == showHeatZones && cacheVisualLayerNinja[idx].ShowEntryLine == showEntryLine && cacheVisualLayerNinja[idx].ShowSLLine == showSLLine && cacheVisualLayerNinja[idx].ShowTPLine == showTPLine && cacheVisualLayerNinja[idx].EqualsInput(input))
+						return cacheVisualLayerNinja[idx];
+			return CacheIndicator<PinkButterfly.VisualLayerNinja>(new PinkButterfly.VisualLayerNinja(){ Language = language, AccountSize = accountSize, MaxZonesToDisplay = maxZonesToDisplay, ShowEntryLines = showEntryLines, ShowSLTPLines = showSLTPLines, ShowPanel = showPanel, ZoneOpacity = zoneOpacity, BullishBrush = bullishBrush, BearishBrush = bearishBrush, NeutralBrush = neutralBrush, EntryBrush = entryBrush, SLBrush = sLBrush, TPBrush = tPBrush, ShowAllHeatZones = showAllHeatZones, ShowStructuralLevels = showStructuralLevels, VisualBarsLimit = visualBarsLimit, MinVisualScore = minVisualScore, MinVisualHeightATR = minVisualHeightATR, ShowHeatZones = showHeatZones, ShowEntryLine = showEntryLine, ShowSLLine = showSLLine, ShowTPLine = showTPLine }, input, ref cacheVisualLayerNinja);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
+{
+	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
+	{
+		public Indicators.PinkButterfly.VisualLayerNinja VisualLayerNinja(LanguageOption language, double accountSize, int maxZonesToDisplay, bool showEntryLines, bool showSLTPLines, bool showPanel, int zoneOpacity, Brush bullishBrush, Brush bearishBrush, Brush neutralBrush, Brush entryBrush, Brush sLBrush, Brush tPBrush, bool showAllHeatZones, bool showStructuralLevels, int visualBarsLimit, double minVisualScore, double minVisualHeightATR, bool showHeatZones, bool showEntryLine, bool showSLLine, bool showTPLine)
+		{
+			return indicator.VisualLayerNinja(Input, language, accountSize, maxZonesToDisplay, showEntryLines, showSLTPLines, showPanel, zoneOpacity, bullishBrush, bearishBrush, neutralBrush, entryBrush, sLBrush, tPBrush, showAllHeatZones, showStructuralLevels, visualBarsLimit, minVisualScore, minVisualHeightATR, showHeatZones, showEntryLine, showSLLine, showTPLine);
+		}
+
+		public Indicators.PinkButterfly.VisualLayerNinja VisualLayerNinja(ISeries<double> input , LanguageOption language, double accountSize, int maxZonesToDisplay, bool showEntryLines, bool showSLTPLines, bool showPanel, int zoneOpacity, Brush bullishBrush, Brush bearishBrush, Brush neutralBrush, Brush entryBrush, Brush sLBrush, Brush tPBrush, bool showAllHeatZones, bool showStructuralLevels, int visualBarsLimit, double minVisualScore, double minVisualHeightATR, bool showHeatZones, bool showEntryLine, bool showSLLine, bool showTPLine)
+		{
+			return indicator.VisualLayerNinja(input, language, accountSize, maxZonesToDisplay, showEntryLines, showSLTPLines, showPanel, zoneOpacity, bullishBrush, bearishBrush, neutralBrush, entryBrush, sLBrush, tPBrush, showAllHeatZones, showStructuralLevels, visualBarsLimit, minVisualScore, minVisualHeightATR, showHeatZones, showEntryLine, showSLLine, showTPLine);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.Strategies
+{
+	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
+	{
+		public Indicators.PinkButterfly.VisualLayerNinja VisualLayerNinja(LanguageOption language, double accountSize, int maxZonesToDisplay, bool showEntryLines, bool showSLTPLines, bool showPanel, int zoneOpacity, Brush bullishBrush, Brush bearishBrush, Brush neutralBrush, Brush entryBrush, Brush sLBrush, Brush tPBrush, bool showAllHeatZones, bool showStructuralLevels, int visualBarsLimit, double minVisualScore, double minVisualHeightATR, bool showHeatZones, bool showEntryLine, bool showSLLine, bool showTPLine)
+		{
+			return indicator.VisualLayerNinja(Input, language, accountSize, maxZonesToDisplay, showEntryLines, showSLTPLines, showPanel, zoneOpacity, bullishBrush, bearishBrush, neutralBrush, entryBrush, sLBrush, tPBrush, showAllHeatZones, showStructuralLevels, visualBarsLimit, minVisualScore, minVisualHeightATR, showHeatZones, showEntryLine, showSLLine, showTPLine);
+		}
+
+		public Indicators.PinkButterfly.VisualLayerNinja VisualLayerNinja(ISeries<double> input , LanguageOption language, double accountSize, int maxZonesToDisplay, bool showEntryLines, bool showSLTPLines, bool showPanel, int zoneOpacity, Brush bullishBrush, Brush bearishBrush, Brush neutralBrush, Brush entryBrush, Brush sLBrush, Brush tPBrush, bool showAllHeatZones, bool showStructuralLevels, int visualBarsLimit, double minVisualScore, double minVisualHeightATR, bool showHeatZones, bool showEntryLine, bool showSLLine, bool showTPLine)
+		{
+			return indicator.VisualLayerNinja(input, language, accountSize, maxZonesToDisplay, showEntryLines, showSLTPLines, showPanel, zoneOpacity, bullishBrush, bearishBrush, neutralBrush, entryBrush, sLBrush, tPBrush, showAllHeatZones, showStructuralLevels, visualBarsLimit, minVisualScore, minVisualHeightATR, showHeatZones, showEntryLine, showSLLine, showTPLine);
+		}
+	}
+}
+
+#endregion

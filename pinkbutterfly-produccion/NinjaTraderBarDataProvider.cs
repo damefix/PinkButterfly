@@ -92,21 +92,21 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 if (right < 0)
                     return -1;
 
-                // Binary search (series descendentes): primer índice mid donde Time(mid) >= timeUtc
+                // Binary search (series descendentes): último índice mid donde Time(mid) <= timeUtc (at-or-before)
                 int result = -1;
                 while (left <= right)
                 {
                     int mid = left + ((right - left) / 2);
                     int barsAgo = _indicator.CurrentBars[i] - mid;
                     DateTime t = _indicator.Times[i][barsAgo];
-                    if (t >= timeUtc)
+                    if (t <= timeUtc)
                     {
-                        result = mid;      // candidato, buscamos si hay uno anterior que también cumpla
-                        right = mid - 1;   // mover el límite derecho para encontrar el primero
+                        result = mid;      // candidato válido (at-or-before)
+                        left = mid + 1;    // buscar si hay uno más reciente que también cumpla
                     }
                     else
                     {
-                        left = mid + 1;    // mover hacia índices más antiguos
+                        right = mid - 1;   // mover hacia índices más antiguos
                     }
                 }
 

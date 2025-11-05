@@ -144,7 +144,10 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 }
 
                 // Crear HeatZone usando SOLO las dimensiones del Trigger (no envolvente total)
-                var heatZone = CreateHierarchicalHeatZone(snapshot, trigger, nearbyTriggers, supportingAnchors, barData, analysisTime, currentBar);
+                var heatZone = CreateHierarchicalHeatZone(snapshot, trigger, nearbyTriggers, supportingAnchors, barData, analysisTime, currentBar, atr);
+                if (heatZone == null)
+                    continue; // Zona descartada por tamaño excesivo
+                
                 heatZones.Add(heatZone);
 
                 if (supportingAnchors.Count > 0) sfWithAnchors++;
@@ -210,7 +213,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             List<StructureBase> anchors,
             IBarDataProvider barData,
             DateTime analysisTime,
-            int currentBar)
+            int currentBar,
+            double atr)
         {
             var heatZone = new HeatZone
             {
@@ -229,6 +233,16 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             
             heatZone.High = allTriggers.Max(s => s.High);
             heatZone.Low = allTriggers.Min(s => s.Low);
+
+            // Validación de tamaño máximo de zona (V6.0c: evitar mega-zonas por fusión transitiva)
+            double zoneSize = Math.Abs(heatZone.High - heatZone.Low);
+            if (atr <= 0) atr = 1.0;
+            double zoneSizeATR = zoneSize / atr;
+            if (zoneSizeATR > _config.MaxZoneSizeATR)
+            {
+                _logger.Warning($"[StructureFusion] Zona {heatZone.Id} descartada por tamaño: {zoneSizeATR:F2} ATR (>{_config.MaxZoneSizeATR}). Rango={heatZone.Low:F2}-{heatZone.High:F2}");
+                return null;
+            }
 
             // 2. SCORE: Score del Trigger principal + Bono por Anchors
             double baseScore = triggerMain.Score;

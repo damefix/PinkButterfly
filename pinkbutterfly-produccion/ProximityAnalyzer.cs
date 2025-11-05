@@ -55,6 +55,13 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
             double currentPrice = snapshot.Summary.CurrentPrice;
 
+            // Guard: si CurrentPrice inválido, no procesar proximidad
+            if (currentPrice <= 0.0)
+            {
+                _logger.Warning($"[ProximityAnalyzer] CurrentPrice inválido ({currentPrice:F2}). Saltando {snapshot.HeatZones.Count} zonas.");
+                return;
+            }
+
             if (_config.EnablePerfDiagnostics && _config.EnableDebug)
                 _logger.Debug(string.Format("[ProximityAnalyzer] Precio actual: {0:F2}, HeatZones: {1}",
                     currentPrice, snapshot.HeatZones.Count));

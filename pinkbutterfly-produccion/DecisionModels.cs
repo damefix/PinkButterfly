@@ -103,6 +103,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         public double GlobalBiasStrength { get; set; } // 0.0 - 1.0
         public double MarketClarity { get; set; } // 0.0 - 1.0 (alta = estructuras claras)
         public double MarketVolatilityNormalized { get; set; } // 0.0 - 1.0 (normalizado por ATR)
+        public string MarketRegime { get; set; } // V6.0i: "Normal" o "HighVol" (con histéresis)
         public DecisionSummary Summary { get; set; }
         public Dictionary<string, object> Metadata { get; set; } // Metadata adicional para el pipeline
 

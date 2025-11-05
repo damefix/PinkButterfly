@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
 Script para generar informes automáticamente usando los logs más recientes
-Ejecuta analizador-DFM.py y analizador-diagnostico-logs.py con los archivos más nuevos
+Ejecuta 3 analizadores:
+1. analizador-diagnostico-logs.py (métricas detalladas del sistema)
+2. analizador-DFM.py (KPI Suite completa)
+3. analizador-logica-operaciones.py (análisis de bias, entradas, SL/TP con MFE/MAE)
 """
 
 import os
@@ -79,10 +82,12 @@ def main():
     # Preparar paths de salida (nombres fijos que usan los scripts)
     diagnostico_output_temp = "export/DIAGNOSTICO_LOGS.md"
     kpi_output_temp = "export/KPI_SUITE_COMPLETA.md"
+    logica_output_temp = "export/ANALISIS_LOGICA_DE_OPERACIONES.md"
     
     # Paths finales con timestamp
     diagnostico_output_final = f"export/DIAGNOSTICO_LOGS_{timestamp}.md"
     kpi_output_final = f"export/KPI_SUITE_COMPLETA_{timestamp}.md"
+    logica_output_final = f"export/ANALISIS_LOGICA_DE_OPERACIONES_{timestamp}.md"
     
     # Ejecutar analizador-diagnostico-logs.py
     print("="*70)
@@ -125,23 +130,52 @@ def main():
         print(f"\n[ERROR] ERROR al generar KPI Suite (codigo: {result2})")
     
     print()
+    
+    # Ejecutar analizador-logica-operaciones.py
+    print("="*70)
+    print("EJECUTANDO: analizador-logica-operaciones.py")
+    print("="*70)
+    cmd_logica = f'python export/analizador-logica-operaciones.py'
+    print(f"Comando: {cmd_logica}")
+    print("(Este script busca automáticamente los archivos más recientes)")
+    print()
+    
+    result3 = os.system(cmd_logica)
+    
+    if result3 == 0:
+        print(f"\n[OK] Análisis Lógica de Operaciones generado: {logica_output_temp}")
+        # Hacer copia con timestamp
+        import shutil
+        shutil.copy2(logica_output_temp, logica_output_final)
+        print(f"[OK] Copia con timestamp: {logica_output_final}")
+    else:
+        print(f"\n[ERROR] ERROR al generar Análisis Lógica (codigo: {result3})")
+    
+    print()
     print("="*70)
     print("RESUMEN")
     print("="*70)
     
-    if result1 == 0 and result2 == 0:
-        print("[OK] Ambos informes generados correctamente")
+    if result1 == 0 and result2 == 0 and result3 == 0:
+        print("[OK] Todos los informes generados correctamente")
         print(f"\nArchivos generados:")
         print(f"  - {diagnostico_output_final}")
         print(f"  - {kpi_output_final}")
+        print(f"  - {logica_output_final}")
         print(f"\nArchivos base (siempre actualizados):")
         print(f"  - {diagnostico_output_temp}")
         print(f"  - {kpi_output_temp}")
+        print(f"  - {logica_output_temp}")
         print(f"\nBasados en:")
         print(f"  - LOG: {Path(log_path).name}")
         print(f"  - CSV: {Path(csv_path).name}")
     else:
         print("[ERROR] Hubo errores al generar los informes")
+        errors = []
+        if result1 != 0: errors.append("Diagnóstico")
+        if result2 != 0: errors.append("KPI")
+        if result3 != 0: errors.append("Lógica")
+        print(f"Informes con errores: {', '.join(errors)}")
         sys.exit(1)
 
 

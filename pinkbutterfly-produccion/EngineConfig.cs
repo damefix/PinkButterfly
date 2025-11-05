@@ -656,6 +656,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
         /// <summary>
         /// [DIAG] Intervalo (en barras del TF de decisión) para emitir trazas agregadas
+        /// Intervalo de barras para las trazas de diagnóstico agregadas
         /// </summary>
         public int DiagnosticsInterval { get; set; } = 100;
         
@@ -738,6 +739,13 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// Ejemplo: 0.5 = estructuras a menos de 0.5 * ATR se fusionan en una HeatZone
         /// </summary>
         public double HeatZone_OverlapToleranceATR { get; set; } = 0.5;
+        
+        /// <summary>
+        /// Tamaño máximo permitido para una HeatZone (múltiplos de ATR14).
+        /// Zonas mayores se descartan para evitar fusión transitiva desmesurada.
+        /// V6.0c: Fix para mega-zonas causadas por clustering transitivo
+        /// </summary>
+        public double MaxZoneSizeATR { get; set; } = 10.0;
         
         /// <summary>
         /// Número mínimo de estructuras para crear una HeatZone
@@ -841,7 +849,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// OPTIMIZACIÓN: R:R mínimo de 1.0 para eliminar operaciones con R:R absurdo (0.05-0.18)
         /// Operaciones con R:R < 1.0 se rechazan
         /// </summary>
-        public double MinRiskRewardRatio { get; set; } = 1.0;
+        public double MinRiskRewardRatio { get; set; } = 1.0;  // V6.0f: Revertido - R:R 1.5 colapsó WR (45%→28.6%)
         
         /// <summary>
         /// Buffer adicional para el Stop Loss (como factor del ATR)
@@ -855,9 +863,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         
         /// <summary>
         /// Confidence mínima para generar señal de BUY/SELL (0.0 - 1.0)
-        /// V5.3: Bajado a 0.55 para aumentar frecuencia de operaciones (punto medio entre V5 y V5.2)
+        /// V6.0a: Subido a 0.60 para filtrar señales débiles tras implementación MTF
         /// </summary>
-        public double MinConfidenceForEntry { get; set; } = 0.55;
+        public double MinConfidenceForEntry { get; set; } = 0.65; // V6.0f: Filtro más estricto (antes: 0.60)
         
         /// <summary>
         /// Mínimo de confluencia requerida PARA CONSIDERAR ENTRADA (gating duro en DFM).
@@ -885,6 +893,201 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// Operaciones con SL > 15 ATR se rechazan
         /// </summary>
         public double MaxSLDistanceATR { get; set; } = 15.0;
+        
+        /// <summary>
+        /// Distancia máxima de TP en múltiplos de ATR (régimen normal).
+        /// V6.0i: 10.0 ATRs para objetivos alcanzables
+        /// </summary>
+        public double MaxTPDistanceATR { get; set; } = 10.0;
+        
+        /// <summary>
+        /// Distancia máxima de SL en puntos absolutos (doble cerrojo con ATR).
+        /// V6.0g: Ajustado a P90 de operaciones reales intradía (análisis data-driven)
+        /// Ejemplo ES: 83 puntos = $415 de riesgo máximo por operación
+        /// </summary>
+        public double MaxSLDistancePoints { get; set; } = 83.0;
+
+        /// <summary>
+        /// Distancia máxima de TP en puntos absolutos (doble cerrojo con ATR).
+        /// V6.0g: Ajustado a P90 de operaciones reales intradía (análisis data-driven)
+        /// Ejemplo ES: 75 puntos = $375 de objetivo máximo por operación (era 120)
+        /// </summary>
+        public double MaxTPDistancePoints { get; set; } = 75.0;
+
+        // =====================================================================
+        // V6.0i: RÉGIMEN DE VOLATILIDAD ADAPTATIVO CON HISTÉRESIS
+        // =====================================================================
+        
+        /// <summary>
+        /// Umbral ALTO de ATR60 para ENTRAR en régimen HighVol (histéresis).
+        /// V6.0i: ~P70 de ATR60 histórico (17.0 para ES)
+        /// </summary>
+        public double HighVolatilityATR_EnterThreshold { get; set; } = 17.0;
+        
+        /// <summary>
+        /// Umbral BAJO de ATR60 para SALIR de régimen HighVol (histéresis).
+        /// V6.0i: ~P60 de ATR60 histórico (13.0 para ES)
+        /// Evita flip-flop: solo sale de HighVol si ATR < 13.0
+        /// </summary>
+        public double HighVolatilityATR_ExitThreshold { get; set; } = 13.0;
+        
+        /// <summary>
+        /// Habilitar sistema de régimen adaptativo.
+        /// V6.0i: true (activo por defecto)
+        /// </summary>
+        public bool UseAdaptiveRegime { get; set; } = true;
+        
+        // =====================================================================
+        // LÍMITES RÉGIMEN NORMAL (actual)
+        // =====================================================================
+        
+        /// <summary>
+        /// Banda mínima para búsqueda de SL en ATRs (régimen normal).
+        /// V6.0i: 8.0 ATRs
+        /// </summary>
+        public double SL_BandMin_Normal { get; set; } = 8.0;
+        
+        /// <summary>
+        /// Banda máxima para búsqueda de SL en ATRs (régimen normal).
+        /// V6.0i: 15.0 ATRs
+        /// </summary>
+        public double SL_BandMax_Normal { get; set; } = 15.0;
+        
+        /// <summary>
+        /// Target de SL en ATRs (régimen normal).
+        /// V6.0i: 11.5 ATRs
+        /// </summary>
+        public double SL_Target_Normal { get; set; } = 11.5;
+        
+        // =====================================================================
+        // LÍMITES RÉGIMEN ALTA VOLATILIDAD (V6.0i - más conservadores)
+        // =====================================================================
+        
+        /// <summary>
+        /// Banda mínima para búsqueda de SL en ATRs (régimen HighVol).
+        /// V6.0i: 4.0 ATRs (más corto que normal)
+        /// </summary>
+        public double SL_BandMin_HighVol { get; set; } = 4.0;
+        
+        /// <summary>
+        /// Banda máxima para búsqueda de SL en ATRs (régimen HighVol).
+        /// V6.0i: 8.0 ATRs (más corto que normal)
+        /// </summary>
+        public double SL_BandMax_HighVol { get; set; } = 8.0;
+        
+        /// <summary>
+        /// Target de SL en ATRs (régimen HighVol).
+        /// V6.0i: 6.0 ATRs (más conservador)
+        /// </summary>
+        public double SL_Target_HighVol { get; set; } = 6.0;
+        
+        /// <summary>
+        /// Distancia máxima de SL en puntos (régimen HighVol).
+        /// V6.0i: 60 puntos (vs 83 normal) - Estricto
+        /// </summary>
+        public double MaxSLDistancePoints_HighVol { get; set; } = 60.0;
+        
+        /// <summary>
+        /// Distancia máxima de SL en ATR (régimen HighVol).
+        /// V6.0i: 7.0 ATRs (vs 15.0 normal)
+        /// </summary>
+        public double MaxSLDistanceATR_HighVol { get; set; } = 7.0;
+        
+        /// <summary>
+        /// Distancia máxima de TP en puntos (régimen HighVol).
+        /// V6.0i: 70 puntos (vs 75 normal) - RR ~1.16 con SL=60
+        /// </summary>
+        public double MaxTPDistancePoints_HighVol { get; set; } = 70.0;
+        
+        /// <summary>
+        /// Distancia máxima de TP en ATR (régimen HighVol).
+        /// V6.0i: 9.0 ATRs (vs 10.0 normal)
+        /// </summary>
+        public double MaxTPDistanceATR_HighVol { get; set; } = 9.0;
+        
+        /// <summary>
+        /// Ventana de R:R para TP en régimen HighVol.
+        /// V6.0i: [1.0, 1.6] (más conservador que [1.0, 3.0])
+        /// </summary>
+        public double MinRR_HighVol { get; set; } = 1.0;
+        public double MaxRR_HighVol { get; set; } = 1.6;
+        
+        /// <summary>
+        /// Ventana de DistATR para TP en régimen HighVol.
+        /// V6.0i: [4.0, 10.0] (objetivos alcanzables)
+        /// </summary>
+        public double MinDistATR_HighVol { get; set; } = 4.0;
+        public double MaxDistATR_HighVol { get; set; } = 10.0;
+        
+        /// <summary>
+        /// Timeframes permitidos para SL en régimen HighVol.
+        /// V6.0i: Solo 5/15/60 (banear 240/1440)
+        /// </summary>
+        public List<int> AllowedTFs_SL_HighVol { get; set; } = new List<int> { 5, 15, 60 };
+        
+        /// <summary>
+        /// Timeframes permitidos para TP en régimen HighVol.
+        /// V6.0i: Solo 5/15/60 (banear 240/1440, excepto válvula de seguridad)
+        /// </summary>
+        public List<int> AllowedTFs_TP_HighVol { get; set; } = new List<int> { 5, 15, 60 };
+        
+        /// <summary>
+        /// Válvula de seguridad: permitir TF≥240 en HighVol si cumple AMBAS:
+        /// - RR >= SafetyValve_MinRR
+        /// - SL/TP <= límites HighVol
+        /// V6.0i: RR >= 1.2
+        /// </summary>
+        public double SafetyValve_MinRR { get; set; } = 1.2;
+        
+        // =====================================================================
+        // FILTROS DE ENTRADA ADAPTIVOS (V6.0i)
+        // =====================================================================
+        
+        /// <summary>
+        /// Confidence mínima para entrada en régimen HighVol.
+        /// V6.0i: 0.65 (vs 0.55 normal) - +0.10 más estricto
+        /// </summary>
+        public double MinConfidenceForEntry_HighVol { get; set; } = 0.65;
+        
+        /// <summary>
+        /// Proximity mínima para entrada en régimen HighVol.
+        /// V6.0i: 0.70 (vs 0.60 normal) - +0.10 más estricto
+        /// </summary>
+        public double MinProximityForEntry_HighVol { get; set; } = 0.70;
+        
+        /// <summary>
+        /// Distancia máxima al entry en múltiplos de ATR60 (régimen HighVol).
+        /// V6.0i: 0.6 * ATR60 (evitar entradas muy lejanas)
+        /// </summary>
+        public double MaxDistanceToEntry_ATR_HighVol { get; set; } = 0.6;
+        
+        /// <summary>
+        /// Máximo de barras para que la orden sea ejecutada (régimen HighVol).
+        /// V6.0i: 32 barras @ 15m = 8 horas (no dejar órdenes vivas mucho tiempo)
+        /// </summary>
+        public int MaxBarsToFillEntry_HighVol { get; set; } = 32;
+        
+        /// <summary>
+        /// Threshold de bias compuesto en régimen HighVol.
+        /// V6.0i: 0.35 (vs 0.3 normal) - Más estricto para evitar contras en picos
+        /// </summary>
+        public double BiasThreshold_HighVol { get; set; } = 0.35;
+        
+        // =====================================================================
+        // GESTIÓN DE RIESGO ADAPTATIVA (V6.0i)
+        // =====================================================================
+        
+        /// <summary>
+        /// Máximo de contratos por operación en régimen HighVol.
+        /// V6.0i: 1 contrato (limitar exposición)
+        /// </summary>
+        public int MaxContracts_HighVol { get; set; } = 1;
+        
+        /// <summary>
+        /// Riesgo por operación en dólares (régimen HighVol).
+        /// V6.0i: $300 (vs $500 normal) - Más conservador
+        /// </summary>
+        public double RiskPerTrade_HighVol { get; set; } = 300.0;
         
         /// <summary>
         /// Distancia mínima recomendada para el Stop Loss (en múltiplos de ATR)

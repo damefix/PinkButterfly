@@ -92,6 +92,58 @@ def parse_log(log_path: str) -> dict:
         re.IGNORECASE
     )
 
+    # V6.0d: Doble cerrojo - validación híbrida puntos/ATR
+    re_sl_check_fail = re.compile(
+        r"\[RISK\]\[SL_CHECK_FAIL\]\s*Zone=(\S+)\s*SL=([0-9\.,]+)pts.*?SLDistATR=([0-9\.,]+).*?SLTF=(-?\d+).*?ATR=([0-9\.,]+)",
+        re.IGNORECASE
+    )
+    re_tp_check_fail = re.compile(
+        r"\[RISK\]\[TP_CHECK_FAIL\]\s*Zone=(\S+)\s*TP=([0-9\.,]+)pts.*?TPDistATR=([0-9\.,]+).*?TPTF=(-?\d+).*?ATR=([0-9\.,]+)",
+        re.IGNORECASE
+    )
+    re_sl_high_vol = re.compile(
+        r"\[RISK\]\[SL_HIGH_VOL\]\s*Zone=(\S+)\s*ATR=([0-9\.,]+).*?SLDistATR=([0-9\.,]+).*?SL=([0-9\.,]+)pts",
+        re.IGNORECASE
+    )
+    re_sl_check_pass = re.compile(
+        r"\[RISK\]\[SL_CHECK_PASS\]\s*Zone=(\S+)\s*SL:\s*([0-9\.,]+)pts\s*([0-9\.,]+)ATR\s*TF=(-?\d+)\s*atr=([0-9\.,]+)",
+        re.IGNORECASE
+    )
+    re_tp_check_pass = re.compile(
+        r"\[RISK\]\[TP_CHECK_PASS\]\s*Zone=(\S+)\s*TP:\s*([0-9\.,]+)pts\s*([0-9\.,]+)ATR\s*TF=(-?\d+)\s*atr=([0-9\.,]+)",
+        re.IGNORECASE
+    )
+    # V6.0c: Política TP
+    re_tp_policy_forced = re.compile(
+        r"\[RISK\]\[TP_POLICY\].*?(?:FORCED[_\s]?P3|Zone=\S+\s+FORCED[_\s]?P3).*?TF=(-?\d+).*?DistATR=([0-9\.,]+).*?RR=([0-9\.,]+)",
+        re.IGNORECASE
+    )
+    re_tp_policy_fallback = re.compile(
+        r"\[RISK\]\[TP_POLICY\].*?P4_FALLBACK.*?DistATR=([0-9\.,]+).*?RR=([0-9\.,]+)",
+        re.IGNORECASE
+    )
+    # V6.0f-FASE2: Opposing HeatZone para TP
+    re_tp_policy_opposing = re.compile(
+        r"\[RISK\]\[TP_POLICY\]\s*Zone=(\S+)\s*P0_OPPOSING:\s*ZoneId=(\S+)\s*Dir=(\w+)\s*TF=(-?\d+)\s*Score=([0-9\.,]+)\s*RR=([0-9\.,]+)\s*DistATR=([0-9\.,]+)",
+        re.IGNORECASE
+    )
+    # V6.0f-FASE2: P0_ANY_DIR (fallback de opposing)
+    re_tp_policy_any_dir = re.compile(
+        r"\[RISK\]\[TP_POLICY\]\s*Zone=(\S+)\s*P0_ANY_DIR:\s*ZoneId=(\S+)\s*Dir=(\w+)\s*TF=(-?\d+)\s*Score=([0-9\.,]+)\s*RR=([0-9\.,]+)\s*DistATR=([0-9\.,]+)",
+        re.IGNORECASE
+    )
+    
+    # V6.0f-FASE2: P0_SWING_LITE (swing-based fallback)
+    re_tp_policy_swing_lite = re.compile(
+        r"\[RISK\]\[TP_POLICY\]\s*Zone=(\S+)\s*P0_SWING_LITE:\s*TF=(-?\d+)\s*Score=([0-9\.,]+)\s*RR=([0-9\.,]+)\s*DistATR=([0-9\.,]+)",
+        re.IGNORECASE
+    )
+    # V6.0e: Búsqueda de siguiente TP
+    re_tp_next = re.compile(
+        r"\[RISK\]\[TP_NEXT\]\s*Zone=(\S+)\s*Candidato\s*TF=(-?\d+)\s*TP=([0-9\.,]+)\s*Dist=([0-9\.,]+)pts.*?(PASS|RECHAZADO)",
+        re.IGNORECASE
+    )
+
     re_cancelbias = re.compile(
         rf"\[(?:{re_diagnostic_tag})\]\[CancelBias\].*index=(\d+).*Close=([0-9\.,]+).*EMA200~?=([0-9\.,]+).*Bias=(\w+)")
 
@@ -224,6 +276,55 @@ def parse_log(log_path: str) -> dict:
             'slpick_bands': {
                 'lt8': 0, '8_10': 0, '10_12_5': 0, '12_5_15': 0, 'gt15': 0,
                 'tf': {'5':0,'15':0,'60':0,'240':0,'1440':0}
+            },
+            # V6.0d: Doble cerrojo
+            'rej_sl_points': 0,
+            'rej_tp_points': 0,
+            'rej_sl_high_vol': 0,
+            'rej_sl_points_by_tf': {},
+            'rej_tp_points_by_tf': {},
+            'rej_sl_high_vol_by_tf': {},
+            'sl_check_pass': {
+                'count': 0,
+                'sum_pts': 0.0,
+                'sum_atr_dist': 0.0,
+                'by_tf': {}
+            },
+            'tp_check_pass': {
+                'count': 0,
+                'sum_pts': 0.0,
+                'sum_atr_dist': 0.0,
+                'by_tf': {}
+            },
+            # V6.0c: Política TP
+            'tp_forced_p3': 0,
+            'tp_p4_fallback': 0,
+            'tp_forced_p3_by_tf': {},
+            # V6.0f-FASE2: Opposing HeatZone para TP
+            'tp_p0_opposing': 0,
+            'tp_p0_opposing_by_tf': {},
+            'tp_p0_opposing_avg_score': 0.0,
+            'tp_p0_opposing_avg_rr': 0.0,
+            'tp_p0_opposing_avg_distatr': 0.0,
+            # V6.0f-FASE2: P0_ANY_DIR (fallback de opposing)
+            'tp_p0_any_dir': 0,
+            'tp_p0_any_dir_by_tf': {},
+            'tp_p0_any_dir_avg_score': 0.0,
+            'tp_p0_any_dir_avg_rr': 0.0,
+            'tp_p0_any_dir_avg_distatr': 0.0,
+            # V6.0f-FASE2: P0_SWING_LITE (swing-based fallback)
+            'tp_p0_swing_lite': 0,
+            'tp_p0_swing_lite_by_tf': {},
+            'tp_p0_swing_lite_avg_score': 0.0,
+            'tp_p0_swing_lite_avg_rr': 0.0,
+            'tp_p0_swing_lite_avg_distatr': 0.0,
+            # V6.0e: Búsqueda de siguiente TP
+            'tp_next': {
+                'zones_with_search': set(),
+                'total_candidates': 0,
+                'rejected_by_points': 0,
+                'rejected_by_tf': {},
+                'passed': 0
             },
             'rrplan_bands': {
                 '0_10_sum': 0.0, '0_10_n': 0,
@@ -527,6 +628,132 @@ def parse_log(log_path: str) -> dict:
                     stats['risk']['rrplan_bands']['0_10_n'] += n0
                     stats['risk']['rrplan_bands']['10_15_sum'] += avg_10_15 * n1
                     stats['risk']['rrplan_bands']['10_15_n'] += n1
+                    continue
+
+                # V6.0d: Doble cerrojo - validación híbrida
+                m = re_sl_check_fail.search(line)
+                if m:
+                    stats['risk']['rej_sl_points'] += 1
+                    tf = int(m.group(4))
+                    stats['risk']['rej_sl_points_by_tf'][tf] = stats['risk']['rej_sl_points_by_tf'].get(tf, 0) + 1
+                    continue
+
+                m = re_tp_check_fail.search(line)
+                if m:
+                    stats['risk']['rej_tp_points'] += 1
+                    tf = int(m.group(4))
+                    stats['risk']['rej_tp_points_by_tf'][tf] = stats['risk']['rej_tp_points_by_tf'].get(tf, 0) + 1
+                    continue
+
+                m = re_sl_high_vol.search(line)
+                if m:
+                    stats['risk']['rej_sl_high_vol'] += 1
+                    # Extraer TF si existe en la línea (opcional)
+                    continue
+
+                m = re_sl_check_pass.search(line)
+                if m:
+                    pts = to_float(m.group(2))
+                    atr_dist = to_float(m.group(3))
+                    tf = int(m.group(4))
+                    stats['risk']['sl_check_pass']['count'] += 1
+                    stats['risk']['sl_check_pass']['sum_pts'] += pts
+                    stats['risk']['sl_check_pass']['sum_atr_dist'] += atr_dist
+                    if tf not in stats['risk']['sl_check_pass']['by_tf']:
+                        stats['risk']['sl_check_pass']['by_tf'][tf] = {'count': 0, 'sum_pts': 0.0, 'sum_atr': 0.0}
+                    stats['risk']['sl_check_pass']['by_tf'][tf]['count'] += 1
+                    stats['risk']['sl_check_pass']['by_tf'][tf]['sum_pts'] += pts
+                    stats['risk']['sl_check_pass']['by_tf'][tf]['sum_atr'] += atr_dist
+                    continue
+
+                m = re_tp_check_pass.search(line)
+                if m:
+                    pts = to_float(m.group(2))
+                    atr_dist = to_float(m.group(3))
+                    tf = int(m.group(4))
+                    stats['risk']['tp_check_pass']['count'] += 1
+                    stats['risk']['tp_check_pass']['sum_pts'] += pts
+                    stats['risk']['tp_check_pass']['sum_atr_dist'] += atr_dist
+                    if tf not in stats['risk']['tp_check_pass']['by_tf']:
+                        stats['risk']['tp_check_pass']['by_tf'][tf] = {'count': 0, 'sum_pts': 0.0, 'sum_atr': 0.0}
+                    stats['risk']['tp_check_pass']['by_tf'][tf]['count'] += 1
+                    stats['risk']['tp_check_pass']['by_tf'][tf]['sum_pts'] += pts
+                    stats['risk']['tp_check_pass']['by_tf'][tf]['sum_atr'] += atr_dist
+                    continue
+
+                # V6.0c: Política TP
+                m = re_tp_policy_forced.search(line)
+                if m:
+                    stats['risk']['tp_forced_p3'] += 1
+                    tf = int(m.group(1))
+                    stats['risk']['tp_forced_p3_by_tf'][tf] = stats['risk']['tp_forced_p3_by_tf'].get(tf, 0) + 1
+                    continue
+
+                # V6.0f-FASE2: Opposing HeatZone para TP
+                m = re_tp_policy_opposing.search(line)
+                if m:
+                    tf = int(m.group(4))
+                    score = to_float(m.group(5))
+                    rr = to_float(m.group(6))
+                    dist_atr = to_float(m.group(7))
+                    
+                    stats['risk']['tp_p0_opposing'] += 1
+                    stats['risk']['tp_p0_opposing_by_tf'][tf] = stats['risk']['tp_p0_opposing_by_tf'].get(tf, 0) + 1
+                    stats['risk']['tp_p0_opposing_avg_score'] += score
+                    stats['risk']['tp_p0_opposing_avg_rr'] += rr
+                    stats['risk']['tp_p0_opposing_avg_distatr'] += dist_atr
+                    continue
+
+                # V6.0f-FASE2: P0_ANY_DIR (fallback de opposing)
+                m = re_tp_policy_any_dir.search(line)
+                if m:
+                    tf = int(m.group(4))
+                    score = to_float(m.group(5))
+                    rr = to_float(m.group(6))
+                    dist_atr = to_float(m.group(7))
+                    
+                    stats['risk']['tp_p0_any_dir'] += 1
+                    stats['risk']['tp_p0_any_dir_by_tf'][tf] = stats['risk']['tp_p0_any_dir_by_tf'].get(tf, 0) + 1
+                    stats['risk']['tp_p0_any_dir_avg_score'] += score
+                    stats['risk']['tp_p0_any_dir_avg_rr'] += rr
+                    stats['risk']['tp_p0_any_dir_avg_distatr'] += dist_atr
+                    continue
+                
+                # V6.0f-FASE2: P0_SWING_LITE (swing-based fallback)
+                m = re_tp_policy_swing_lite.search(line)
+                if m:
+                    tf = int(m.group(2))
+                    score = to_float(m.group(3))
+                    rr = to_float(m.group(4))
+                    dist_atr = to_float(m.group(5))
+                    
+                    stats['risk']['tp_p0_swing_lite'] += 1
+                    stats['risk']['tp_p0_swing_lite_by_tf'][tf] = stats['risk']['tp_p0_swing_lite_by_tf'].get(tf, 0) + 1
+                    stats['risk']['tp_p0_swing_lite_avg_score'] += score
+                    stats['risk']['tp_p0_swing_lite_avg_rr'] += rr
+                    stats['risk']['tp_p0_swing_lite_avg_distatr'] += dist_atr
+                    continue
+                
+                m = re_tp_policy_fallback.search(line)
+                if m:
+                    stats['risk']['tp_p4_fallback'] += 1
+                    continue
+            
+                # V6.0e: Búsqueda de siguiente TP
+                m = re_tp_next.search(line)
+                if m:
+                    zone = m.group(1)
+                    tf = int(m.group(2))
+                    status = m.group(5).upper()
+                    
+                    stats['risk']['tp_next']['zones_with_search'].add(zone)
+                    stats['risk']['tp_next']['total_candidates'] += 1
+                    
+                    if status == 'RECHAZADO':
+                        stats['risk']['tp_next']['rejected_by_points'] += 1
+                        stats['risk']['tp_next']['rejected_by_tf'][tf] = stats['risk']['tp_next']['rejected_by_tf'].get(tf, 0) + 1
+                    else:
+                        stats['risk']['tp_next']['passed'] += 1
                     continue
 
                 # SL Analysis
@@ -959,6 +1186,145 @@ def render_markdown(log_path: str, csv_path: str, stats_log: dict, stats_csv: di
     lines.append("## Risk")
     lines.append(f"- Eventos: {risk['lines']}")
     lines.append(f"- Accepted={risk['accepted']} | RejSL={risk['rej_sl']} | RejTP={risk['rej_tp']} | RejRR={risk['rej_rr']} | RejEntry={risk['rej_entry']}")
+    
+    # V6.0d: Doble cerrojo - validación híbrida
+    if risk['rej_sl_points'] + risk['rej_tp_points'] + risk['rej_sl_high_vol'] > 0:
+        lines.append("### Risk – Validación Doble Cerrojo (V6.0d)")
+        lines.append(f"- **RejSL_Points:** {risk['rej_sl_points']} (rechazados por >60pts)")
+        lines.append(f"- **RejTP_Points:** {risk['rej_tp_points']} (rechazados por >120pts)")
+        lines.append(f"- **RejSL_HighVol:** {risk['rej_sl_high_vol']} (rechazados por ATR>15 y DistATR>10)")
+        
+        # Rechazos SL por TF
+        if risk['rej_sl_points_by_tf']:
+            lines.append("")
+            lines.append("**Rechazos SL por TF:**")
+            lines.append("")
+            lines.append("| TF | RejSL_Points |")
+            lines.append("|----|--------------|")
+            for tf in sorted(risk['rej_sl_points_by_tf'].keys()):
+                lines.append(f"| {tf} | {risk['rej_sl_points_by_tf'][tf]} |")
+        
+        # Rechazos TP por TF
+        if risk['rej_tp_points_by_tf']:
+            lines.append("")
+            lines.append("**Rechazos TP por TF:**")
+            lines.append("")
+            lines.append("| TF | RejTP_Points |")
+            lines.append("|----|--------------|")
+            for tf in sorted(risk['rej_tp_points_by_tf'].keys()):
+                lines.append(f"| {tf} | {risk['rej_tp_points_by_tf'][tf]} |")
+        lines.append("")
+    
+    # Medias PASS (si hay datos)
+    if risk['sl_check_pass']['count'] > 0 or risk['tp_check_pass']['count'] > 0:
+        lines.append("### Risk – Medias SL/TP Aceptados")
+        if risk['sl_check_pass']['count'] > 0:
+            avg_pts = risk['sl_check_pass']['sum_pts'] / risk['sl_check_pass']['count']
+            avg_atr = risk['sl_check_pass']['sum_atr_dist'] / risk['sl_check_pass']['count']
+            lines.append(f"- **SL:** {avg_pts:.2f} pts ({avg_atr:.2f} ATR) - n={risk['sl_check_pass']['count']}")
+            if risk['sl_check_pass']['by_tf']:
+                lines.append("  - Por TF:")
+                for tf in sorted(risk['sl_check_pass']['by_tf'].keys()):
+                    d = risk['sl_check_pass']['by_tf'][tf]
+                    if d['count'] > 0:
+                        lines.append(f"    - TF{tf}: {d['sum_pts']/d['count']:.2f} pts ({d['sum_atr']/d['count']:.2f} ATR) n={d['count']}")
+        
+        if risk['tp_check_pass']['count'] > 0:
+            avg_pts = risk['tp_check_pass']['sum_pts'] / risk['tp_check_pass']['count']
+            avg_atr = risk['tp_check_pass']['sum_atr_dist'] / risk['tp_check_pass']['count']
+            lines.append(f"- **TP:** {avg_pts:.2f} pts ({avg_atr:.2f} ATR) - n={risk['tp_check_pass']['count']}")
+            if risk['tp_check_pass']['by_tf']:
+                lines.append("  - Por TF:")
+                for tf in sorted(risk['tp_check_pass']['by_tf'].keys()):
+                    d = risk['tp_check_pass']['by_tf'][tf]
+                    if d['count'] > 0:
+                        lines.append(f"    - TF{tf}: {d['sum_pts']/d['count']:.2f} pts ({d['sum_atr']/d['count']:.2f} ATR) n={d['count']}")
+        lines.append("")
+    
+    # V6.0c: Política TP
+    if risk['tp_forced_p3'] + risk['tp_p4_fallback'] > 0:
+        total_tp = risk['tp_forced_p3'] + risk['tp_p4_fallback']
+        pct_forced = (risk['tp_forced_p3'] / total_tp * 100) if total_tp > 0 else 0
+        lines.append("### TP Policy (V6.0c)")
+        lines.append(f"- **FORCED_P3:** {risk['tp_forced_p3']} ({pct_forced:.1f}%)")
+        lines.append(f"- **P4_FALLBACK:** {risk['tp_p4_fallback']} ({100-pct_forced:.1f}%)")
+        
+        if risk['tp_forced_p3_by_tf']:
+            lines.append("- **FORCED_P3 por TF:**")
+            for tf in sorted(risk['tp_forced_p3_by_tf'].keys()):
+                count = risk['tp_forced_p3_by_tf'][tf]
+                pct = (count / risk['tp_forced_p3'] * 100) if risk['tp_forced_p3'] > 0 else 0
+                lines.append(f"  - TF{tf}: {count} ({pct:.1f}%)")
+        lines.append("")
+    
+    # V6.0f-FASE2: Opposing HeatZone para TP
+    if risk['tp_p0_opposing'] > 0 or risk['tp_p0_any_dir'] > 0 or risk['tp_p0_swing_lite'] > 0:
+        total_tp_all = risk['tp_p0_opposing'] + risk['tp_p0_any_dir'] + risk['tp_p0_swing_lite'] + risk['tp_forced_p3'] + risk['tp_p4_fallback']
+        
+        lines.append("### TP P0 HeatZone-Based (V6.0f-FASE2)")
+        
+        if risk['tp_p0_opposing'] > 0:
+            pct_opposing = (risk['tp_p0_opposing'] / total_tp_all * 100) if total_tp_all > 0 else 0
+            avg_score = risk['tp_p0_opposing_avg_score'] / risk['tp_p0_opposing']
+            avg_rr = risk['tp_p0_opposing_avg_rr'] / risk['tp_p0_opposing']
+            avg_distatr = risk['tp_p0_opposing_avg_distatr'] / risk['tp_p0_opposing']
+            
+            lines.append(f"- **P0_OPPOSING:** {risk['tp_p0_opposing']} ({pct_opposing:.1f}% del total)")
+            lines.append(f"  - Avg Score: {avg_score:.2f} | Avg R:R: {avg_rr:.2f} | Avg DistATR: {avg_distatr:.2f}")
+            if risk['tp_p0_opposing_by_tf']:
+                lines.append("  - Por TF: " + ", ".join([f"TF{tf}={count}" for tf, count in sorted(risk['tp_p0_opposing_by_tf'].items())]))
+        
+        if risk['tp_p0_any_dir'] > 0:
+            pct_any = (risk['tp_p0_any_dir'] / total_tp_all * 100) if total_tp_all > 0 else 0
+            avg_score = risk['tp_p0_any_dir_avg_score'] / risk['tp_p0_any_dir']
+            avg_rr = risk['tp_p0_any_dir_avg_rr'] / risk['tp_p0_any_dir']
+            avg_distatr = risk['tp_p0_any_dir_avg_distatr'] / risk['tp_p0_any_dir']
+            
+            lines.append(f"- **P0_ANY_DIR:** {risk['tp_p0_any_dir']} ({pct_any:.1f}% del total)")
+            lines.append(f"  - Avg Score: {avg_score:.2f} | Avg R:R: {avg_rr:.2f} | Avg DistATR: {avg_distatr:.2f}")
+            if risk['tp_p0_any_dir_by_tf']:
+                lines.append("  - Por TF: " + ", ".join([f"TF{tf}={count}" for tf, count in sorted(risk['tp_p0_any_dir_by_tf'].items())]))
+        
+        if risk['tp_p0_swing_lite'] > 0:
+            pct_swing_lite = (risk['tp_p0_swing_lite'] / total_tp_all * 100) if total_tp_all > 0 else 0
+            avg_score = risk['tp_p0_swing_lite_avg_score'] / risk['tp_p0_swing_lite']
+            avg_rr = risk['tp_p0_swing_lite_avg_rr'] / risk['tp_p0_swing_lite']
+            avg_distatr = risk['tp_p0_swing_lite_avg_distatr'] / risk['tp_p0_swing_lite']
+            
+            lines.append(f"- **P0_SWING_LITE:** {risk['tp_p0_swing_lite']} ({pct_swing_lite:.1f}% del total)")
+            lines.append(f"  - Avg Score: {avg_score:.2f} | Avg R:R: {avg_rr:.2f} | Avg DistATR: {avg_distatr:.2f}")
+            if risk['tp_p0_swing_lite_by_tf']:
+                lines.append("  - Por TF: " + ", ".join([f"TF{tf}={count}" for tf, count in sorted(risk['tp_p0_swing_lite_by_tf'].items())]))
+        
+        lines.append("")
+    
+    # V6.0e: Búsqueda de siguiente TP
+    if risk['tp_next']['zones_with_search']:
+        lines.append("### TP Next Candidate Analysis (V6.0e)")
+        n_zones = len(risk['tp_next']['zones_with_search'])
+        n_total = risk['tp_next']['total_candidates']
+        n_rej = risk['tp_next']['rejected_by_points']
+        n_pass = risk['tp_next']['passed']
+        avg_cand = n_total / n_zones if n_zones > 0 else 0
+        
+        lines.append(f"- **Zonas con búsqueda de siguiente TP:** {n_zones}")
+        lines.append(f"- **Total candidatos evaluados:** {n_total} (promedio {avg_cand:.1f} por zona)")
+        lines.append(f"- **Candidatos rechazados por límite puntos:** {n_rej} ({n_rej/n_total*100:.1f}%)")
+        lines.append(f"- **Candidatos que pasaron límite:** {n_pass} ({n_pass/n_total*100:.1f}%)")
+        
+        if risk['tp_next']['rejected_by_tf']:
+            lines.append("")
+            lines.append("**Rechazados por TF:**")
+            lines.append("")
+            lines.append("| TF | Rechazados | % |")
+            lines.append("|----|------------|---|")
+            total_rej = sum(risk['tp_next']['rejected_by_tf'].values())
+            for tf in sorted(risk['tp_next']['rejected_by_tf'].keys()):
+                count = risk['tp_next']['rejected_by_tf'][tf]
+                pct = count / total_rej * 100 if total_rej > 0 else 0
+                lines.append(f"| {tf} | {count} | {pct:.1f}% |")
+        lines.append("")
+    
     # Risk Drivers
     rd_a = risk['rej_details']['aligned']
     rd_c = risk['rej_details']['counter']

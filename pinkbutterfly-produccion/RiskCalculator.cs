@@ -93,7 +93,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 }
                 else
                 {
-                    CalculateStructuralRiskLevels(zone, barData, coreEngine, currentBar, accountSize);
+                    CalculateStructuralRiskLevels(zone, snapshot, barData, coreEngine, currentBar, accountSize);
                 }
                 bool riskCalculated = zone.Metadata.ContainsKey("RiskCalculated") && (bool)zone.Metadata["RiskCalculated"];
                 if (riskCalculated)
@@ -164,7 +164,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// Calcula Entry, SL, TP y PositionSize para una HeatZone usando ESTRUCTURA INTELIGENTE
         /// Añade los resultados a zone.Metadata
         /// </summary>
-        private void CalculateStructuralRiskLevels(HeatZone zone, IBarDataProvider barData, CoreEngine coreEngine, int currentBar, double accountSize)
+        private void CalculateStructuralRiskLevels(HeatZone zone, DecisionSnapshot snapshot, IBarDataProvider barData, CoreEngine coreEngine, int currentBar, double accountSize)
         {
             // Alinear al tiempo de análisis: usar índice del TF dominante para ATR/Close
             int decisionTF = _config.DecisionTimeframeMinutes;
@@ -254,7 +254,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 }
                 
                 // TP JERÁRQUICO: Buscar objetivo estructural
-                takeProfit = CalculateStructuralTP_Buy(zone, coreEngine, barData, currentBar, entry, stopLoss);
+                takeProfit = CalculateStructuralTP_Buy(zone, snapshot, coreEngine, barData, currentBar, entry, stopLoss);
             }
             else if (zone.Direction == "Bearish")
             {
@@ -298,7 +298,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 }
                 
                 // TP JERÁRQUICO: Buscar objetivo estructural
-                takeProfit = CalculateStructuralTP_Sell(zone, coreEngine, barData, currentBar, entry, stopLoss);
+                takeProfit = CalculateStructuralTP_Sell(zone, snapshot, coreEngine, barData, currentBar, entry, stopLoss);
             }
             else
             {
@@ -334,8 +334,108 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             double rewardDistance = Math.Abs(takeProfit - entry);
             double riskDistance = Math.Abs(entry - stopLoss);
             double actualRR = riskDistance > 0 ? rewardDistance / riskDistance : 0.0;
-            double slDistanceATR = riskDistance / atr;
-            double tpDistanceATR = rewardDistance / atr;
+            
+            // V6.0c-FIX: Usar ATR del TF del swing seleccionado, no del TF dominante de la zona
+            // Si SL/TP son de TFs altos (240/1440), el ATR debe ser del TF alto
+            double atrForSL = atr;  // default: TF dominante
+            double atrForTP = atr;
+            
+            // Declarar variables una sola vez
+            int slTF = zone.TFDominante;  // default
+            int tpTF = zone.TFDominante;  // default
+            
+            // Obtener TF del SL seleccionado
+            if (zone.Metadata.ContainsKey("SL_SwingTF"))
+            {
+                slTF = (int)zone.Metadata["SL_SwingTF"];
+                if (slTF > 0 && slTF != zone.TFDominante)
+                {
+                    int idxSL = barData.GetBarIndexFromTime(slTF, analysisTime);
+                    if (idxSL >= 0)
+                    {
+                        atrForSL = barData.GetATR(slTF, 14, idxSL);
+                        if (atrForSL <= 0) atrForSL = atr;
+                        _logger.Debug($"[RiskCalculator] Zone={zone.Id} SL TF={slTF} (dom={zone.TFDominante}): ATR_dom={atr:F2} → ATR_SL={atrForSL:F2}");
+                    }
+                }
+            }
+            
+            // Obtener TF del TP seleccionado
+            if (zone.Metadata.ContainsKey("TP_TargetTF"))
+            {
+                tpTF = (int)zone.Metadata["TP_TargetTF"];
+                if (tpTF > 0 && tpTF != zone.TFDominante)
+                {
+                    int idxTP = barData.GetBarIndexFromTime(tpTF, analysisTime);
+                    if (idxTP >= 0)
+                    {
+                        atrForTP = barData.GetATR(tpTF, 14, idxTP);
+                        if (atrForTP <= 0) atrForTP = atr;
+                        _logger.Debug($"[RiskCalculator] Zone={zone.Id} TP TF={tpTF} (dom={zone.TFDominante}): ATR_dom={atr:F2} → ATR_TP={atrForTP:F2}");
+                    }
+                }
+            }
+            
+            double slDistanceATR = riskDistance / atrForSL;
+            double tpDistanceATR = rewardDistance / atrForTP;
+            
+            // Trazas de auditoría ATR multi-TF (V6.0c-bis)
+            if (slTF != zone.TFDominante || tpTF != zone.TFDominante)
+            {
+                _logger.Info($"[RISK][ATR_MULTI] Zone={zone.Id} DomTF={zone.TFDominante} ATRdom={atr:F2} | SL: TF={slTF} ATR={atrForSL:F2} Dist={slDistanceATR:F2} | TP: TF={tpTF} ATR={atrForTP:F2} Dist={tpDistanceATR:F2}");
+            }
+            
+            // ========================================================================
+            // V6.0d: DOBLE CERROJO - Defensa en profundidad (puntos + ATR + alta vol)
+            // ========================================================================
+            
+            double slDistancePoints = riskDistance;
+            double tpDistancePoints = rewardDistance;
+
+            // === VALIDACIÓN 1: Rechazo por SL en puntos absolutos ===
+            if (slDistancePoints > _config.MaxSLDistancePoints)
+            {
+                zone.Metadata["RiskCalculated"] = false;
+                zone.Metadata["RejectReason"] = $"SL>{_config.MaxSLDistancePoints}pts";
+                _logger.Info($"[RISK][SL_CHECK_FAIL] Zone={zone.Id} SL={slDistancePoints:F2}pts (>{_config.MaxSLDistancePoints}) SLDistATR={slDistanceATR:F2} SLTF={slTF} ATR={atrForSL:F2} REJECTED");
+                return;
+            }
+
+            // === VALIDACIÓN 2: Rechazo por TP en puntos absolutos ===
+            if (tpDistancePoints > _config.MaxTPDistancePoints)
+            {
+                zone.Metadata["RiskCalculated"] = false;
+                zone.Metadata["RejectReason"] = $"TP>{_config.MaxTPDistancePoints}pts";
+                _logger.Info($"[RISK][TP_CHECK_FAIL] Zone={zone.Id} TP={tpDistancePoints:F2}pts (>{_config.MaxTPDistancePoints}) TPDistATR={tpDistanceATR:F2} TPTF={tpTF} ATR={atrForTP:F2} REJECTED");
+                return;
+            }
+
+            // === VALIDACIÓN 3: Límites ATR adaptativos según régimen (V6.0i) ===
+            // El régimen ya fue detectado en ContextManager con histéresis
+            string regime = snapshot.MarketRegime ?? "Normal"; // Fallback si no está disponible
+            double maxSLATR = (regime == "HighVol") ? _config.MaxSLDistanceATR_HighVol : _config.MaxSLDistanceATR;
+            double maxTPATR = (regime == "HighVol") ? _config.MaxTPDistanceATR_HighVol : _config.MaxTPDistanceATR;
+            
+            if (slDistanceATR > maxSLATR)
+            {
+                zone.Metadata["RiskCalculated"] = false;
+                zone.Metadata["RejectReason"] = $"SL>{maxSLATR}ATR_Regime={regime}";
+                _logger.Warning($"[RISK][SL_ATR_FAIL] Zone={zone.Id} Regime={regime} SLDistATR={slDistanceATR:F2} > Limit={maxSLATR:F2} SL={slDistancePoints:F2}pts REJECTED");
+                return;
+            }
+            
+            if (tpDistanceATR > maxTPATR)
+            {
+                zone.Metadata["RiskCalculated"] = false;
+                zone.Metadata["RejectReason"] = $"TP>{maxTPATR}ATR_Regime={regime}";
+                _logger.Warning($"[RISK][TP_ATR_FAIL] Zone={zone.Id} Regime={regime} TPDistATR={tpDistanceATR:F2} > Limit={maxTPATR:F2} TP={tpDistancePoints:F2}pts REJECTED");
+                return;
+            }
+
+            // Trazas de auditoría cuando PASAN todas las validaciones (V6.0i: incluir régimen)
+            _logger.Debug($"[RISK][SL_CHECK_PASS] Zone={zone.Id} Regime={regime} SL: {slDistancePoints:F2}pts/{slDistanceATR:F2}ATR (Limit={_config.MaxSLDistancePoints}pts/{maxSLATR}ATR) TF={slTF}");
+            _logger.Debug($"[RISK][TP_CHECK_PASS] Zone={zone.Id} Regime={regime} TP: {tpDistancePoints:F2}pts/{tpDistanceATR:F2}ATR (Limit={_config.MaxTPDistancePoints}pts/{maxTPATR}ATR) TF={tpTF}");
+            
             // Guardar drivers SIEMPRE (antes de posibles returns por rechazo)
             zone.Metadata["SLDistanceATR"] = slDistanceATR;
             zone.Metadata["TPDistanceATR"] = tpDistanceATR;
@@ -699,7 +799,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// 3. Swing High opuesto
         /// 4. Fallback: Entry + (Entry - SL) * MinRiskRewardRatio
         /// </summary>
-        private double CalculateStructuralTP_Buy(HeatZone zone, CoreEngine coreEngine, IBarDataProvider barData, int currentBar, double entry, double stopLoss)
+        private double CalculateStructuralTP_Buy(HeatZone zone, DecisionSnapshot snapshot, CoreEngine coreEngine, IBarDataProvider barData, int currentBar, double entry, double stopLoss)
         {
             double riskDistance = entry - stopLoss;
             double fallbackTP = entry + (riskDistance * _config.MinRiskRewardRatio);
@@ -714,6 +814,14 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             DateTime analysisTimeTP = barData.GetBarTime(decisionTF_local, currentBar);
             int idxAtrDom = barData.GetBarIndexFromTime(zone.TFDominante, analysisTimeTP);
             double atr = idxAtrDom >= 0 ? barData.GetATR(zone.TFDominante, 14, idxAtrDom) : 1.0;
+
+            // V6.0f-FASE2: P0 - Buscar HeatZone opuesta PRIMERO (antes de P1/P2/P3)
+            double? opposingTP = GetOpposingZoneTP_Buy(zone, snapshot, barData, coreEngine, analysisTimeTP, entry, riskDistance, atr);
+            if (opposingTP.HasValue)
+            {
+                _logger.Info(string.Format("[RiskCalculator] [P0] TP Opposing Zone seleccionado: {0:F2}", opposingTP.Value));
+                return opposingTP.Value;
+            }
 
             // Recopilar Liquidity targets
             foreach (var tf in _config.TimeframesToUse.OrderByDescending(t => t))
@@ -846,6 +954,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             _logger.Debug("[RiskCalculator] [P3] Buscando Swing High encima de la zona (política RR>=Min y DistATR>=12, TF>=60 preferido)...");
             // Recopilar swings candidatos (encima) en todos los TFs
             var swingCandidatesBuy = new List<Tuple<SwingInfo,int,double,double>>(); // swing, tf, distATR, rr
+            int p3FilteredByPoints = 0; // V6.0f-OPT-B: contador para diagnóstico
             foreach (var tf in _config.TimeframesToUse)
             {
                 var swings = coreEngine.GetAllStructures(tf)
@@ -855,51 +964,136 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 foreach (var sw in swings)
                 {
                     double tpCand = sw.High;
-                    double distATR = Math.Abs(tpCand - entry) / atr;
+                    double tpDistancePts = Math.Abs(tpCand - entry);
+                    
+                    // V6.0f-OPT-B: Pre-validación contra doble cerrojo (evita seleccionar y luego rechazar)
+                    if (tpDistancePts < 0.50 || tpDistancePts > _config.MaxTPDistancePoints)
+                    {
+                        p3FilteredByPoints++;
+                        continue; // Descartar este candidato
+                    }
+                    
+                    double distATR = tpDistancePts / atr;
                     double rrCand = riskDistance > 0 ? (tpCand - entry) / riskDistance : 0.0;
                     swingCandidatesBuy.Add(Tuple.Create(sw, tf, distATR, rrCand));
                 }
             }
-            // Fase A: preferir TF>=60 cumpliendo RR y distancia
+            if (p3FilteredByPoints > 0)
+            {
+                _logger.Info(string.Format("[RISK][TP_FILTER] Zone={0} P3_BUY RemovedByPoints={1} (>{2}pts)", zone.Id, p3FilteredByPoints, _config.MaxTPDistancePoints));
+            }
+            // Fase A: preferir TF>=60 cumpliendo RR y distancia (V6.0c: DistATR>=6.0, RR>=1.0)
             var primaryTPBuy = swingCandidatesBuy
-                .Where(c => c.Item2 >= 60 && c.Item4 >= _config.MinRiskRewardRatio && c.Item3 >= 12.0)
+                .Where(c => c.Item2 >= 60 && c.Item4 >= 1.0 && c.Item3 >= 6.0)
                 .OrderByDescending(c => c.Item2) // TF alto primero
                 .ThenBy(c => c.Item3)           // más cerca dentro de lo admisible
                 .FirstOrDefault();
             var chosenTPBuy = primaryTPBuy;
-            string tpReason = "SwingP3_TF>=60_RR>=Min_Dist>=12";
+            string tpReason = "SwingP3_TF>=60_RR>=1.0_Dist>=6";
             if (chosenTPBuy == null)
             {
                 // Fase B: aceptar TF bajos si cumplen RR y distancia (penalizando TF<60)
                 chosenTPBuy = swingCandidatesBuy
-                    .Where(c => c.Item4 >= _config.MinRiskRewardRatio && c.Item3 >= 12.0)
+                    .Where(c => c.Item4 >= 1.0 && c.Item3 >= 6.0)
                     .OrderByDescending(c => c.Item2 >= 60 ? 1 : 0) // pseudo-penalización
                     .ThenBy(c => c.Item3)
                     .FirstOrDefault();
-                tpReason = "SwingP3_ANYTF_RR>=Min_Dist>=12";
+                tpReason = "SwingP3_ANYTF_RR>=1.0_Dist>=6";
             }
+            // V6.0e: Búsqueda de siguiente TP si el primero es rechazado por límite de puntos
             if (chosenTPBuy != null)
             {
-                var sw = chosenTPBuy.Item1; int tfSel = chosenTPBuy.Item2; double distATRSelected = chosenTPBuy.Item3; double rrSelected = chosenTPBuy.Item4;
+                // Validar todos los candidatos contra límite de puntos (120pts)
+                var validCandidates = new List<Tuple<SwingInfo,int,double,double>>();
+                
+                // V6.0e PASO 2: Filtrar candidatos por TF con criterios específicos
+                var filteredCandidatesBuy = swingCandidatesBuy.Where(c => 
+                    c != chosenTPBuy && 
+                    c.Item4 >= 1.0 && // RR >= 1.0 (todos)
+                    (
+                        (c.Item2 == 1440 && c.Item3 >= 8.0) || // TF1440: DistATR >= 8.0
+                        (c.Item2 != 1440 && c.Item3 >= 6.0)    // TF60/240/otros: DistATR >= 6.0
+                    )
+                );
+                
+                // Ordenar: TF descendente → DistATR ascendente → RR descendente
+                var orderedCandidatesBuy = filteredCandidatesBuy
+                    .OrderByDescending(c => c.Item2)      // TF alto primero (1440→240→60→15→5)
+                    .ThenBy(c => c.Item3)                 // DistATR más cerca
+                    .ThenByDescending(c => c.Item4);      // RR más alto
+                
+                // Primero intentar con el candidato elegido
+                foreach (var candidate in new[] { chosenTPBuy }.Concat(orderedCandidatesBuy))
+                {
+                    double tpPrice = candidate.Item1.High;
+                    double tpDistancePts = Math.Abs(tpPrice - entry);
+                    
+                    if (tpDistancePts <= _config.MaxTPDistancePoints)
+                    {
+                        validCandidates.Add(candidate);
+                        _logger.Debug(string.Format("[RISK][TP_NEXT] Zone={0} Candidato TF={1} TP={2:F2} Dist={3:F2}pts RR={4:F2} DistATR={5:F2} PASS",
+                            zone.Id, candidate.Item2, tpPrice, tpDistancePts, candidate.Item4, candidate.Item3));
+                    }
+                    else
+                    {
+                        _logger.Debug(string.Format("[RISK][TP_NEXT] Zone={0} Candidato TF={1} TP={2:F2} Dist={3:F2}pts (>{4}) RECHAZADO por límite puntos",
+                            zone.Id, candidate.Item2, tpPrice, tpDistancePts, _config.MaxTPDistancePoints));
+                    }
+                }
+                
+                // Si hay candidatos válidos, usar el primero (mejor prioridad/distancia)
+                if (validCandidates.Count > 0)
+                {
+                    var finalCandidate = validCandidates.First();
+                    var sw = finalCandidate.Item1; int tfSel = finalCandidate.Item2; double distATRSelected = finalCandidate.Item3; double rrSelected = finalCandidate.Item4;
+                    double tp = sw.High;
+                    int idxStructSel = barData.GetBarIndexFromTime(tfSel, analysisTimeTP);
+                    int ageSelected = idxStructSel >= 0 ? (idxStructSel - sw.CreatedAtBarIndex) : int.MaxValue;
+                    
+                    string selectionReason = (validCandidates.Count > 1) ? 
+                        string.Format("{0}_NextCandidate_{1}of{2}", tpReason, validCandidates.IndexOf(finalCandidate) + 1, validCandidates.Count) : 
+                        tpReason;
+                    
+                    _logger.Info(string.Format("[RISK][TP_POLICY] Zone={0} FORCED_P3: TF={1} DistATR={2:F2} RR={3:F2} Price={4:F2} (Candidatos validados: {5})",
+                        zone.Id, tfSel, distATRSelected, rrSelected, tp, validCandidates.Count));
+                    _logger.Info(string.Format("[DIAGNOSTICO][Risk] TP_SELECTED: Zone={0} Priority=P3 Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} RR={6:F2} Reason={7}",
+                        zone.Id, sw.Score, tfSel, distATRSelected, ageSelected, tp, rrSelected, selectionReason));
+                    zone.Metadata["TP_Structural"] = true;
+                    zone.Metadata["TP_TargetTF"] = tfSel;
+                    return tp;
+                }
+                else
+                {
+                    _logger.Warning(string.Format("[RISK][TP_POLICY] Zone={0} Todos los candidatos P3 rechazados por límite de puntos (>{1}). Cayendo a fallback.",
+                        zone.Id, _config.MaxTPDistancePoints));
+                }
+            }
+
+            // ANTES de fallback: verificar si existe P3 con criterios mínimos para forzar estructural
+            var forcedP3Buy = swingCandidatesBuy
+                .Where(c => c.Item2 >= 60 && c.Item4 >= 1.0 && c.Item3 >= 6.0)
+                .OrderByDescending(c => c.Item2)
+                .ThenBy(c => c.Item3)
+                .FirstOrDefault();
+            
+            if (forcedP3Buy != null)
+            {
+                var sw = forcedP3Buy.Item1; int tfSel = forcedP3Buy.Item2; double distATRSelected = forcedP3Buy.Item3; double rrSelected = forcedP3Buy.Item4;
                 double tp = sw.High;
                 int idxStructSel = barData.GetBarIndexFromTime(tfSel, analysisTimeTP);
                 int ageSelected = idxStructSel >= 0 ? (idxStructSel - sw.CreatedAtBarIndex) : int.MaxValue;
-                _logger.Info(string.Format("[RISK][TP_POLICY] Zone={0} Selected: TF={1} DistATR={2:F2} RR={3:F2} Price={4:F2} Reason={5}",
-                    zone.Id, tfSel, distATRSelected, rrSelected, tp, tpReason));
-                _logger.Info(string.Format("[DIAGNOSTICO][Risk] TP_SELECTED: Zone={0} Priority=P3 Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} RR={6:F2} Reason={7}",
-                    zone.Id, sw.Score, tfSel, distATRSelected, ageSelected, tp, rrSelected, tpReason));
+                _logger.Info(string.Format("[RISK][TP_POLICY] Zone={0} FORCED_P3 (evitando fallback): TF={1} DistATR={2:F2} RR={3:F2} Price={4:F2}",
+                    zone.Id, tfSel, distATRSelected, rrSelected, tp));
+                _logger.Info(string.Format("[DIAGNOSTICO][Risk] TP_SELECTED: Zone={0} Priority=P3 Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} RR={6:F2} Reason=ForcedP3_NoFallback",
+                    zone.Id, sw.Score, tfSel, distATRSelected, ageSelected, tp, rrSelected));
                 zone.Metadata["TP_Structural"] = true;
                 zone.Metadata["TP_TargetTF"] = tfSel;
                 return tp;
             }
-            else
-            {
-                _logger.Debug("[RiskCalculator] [P3] No hay swings que cumplan RR>=Min y DistATR>=12");
-            }
 
-            // 4. FALLBACK: R:R mínimo
-            _logger.Warning(string.Format("[RiskCalculator] ⚠ [P4] FALLBACK: No se encontró target estructural válido, usando R:R mínimo @ {0:F2}",
-                fallbackTP));
+            // 4. FALLBACK: R:R mínimo (solo si NO hay P3 válido)
+            _logger.Warning(string.Format("[RISK][TP_POLICY] Zone={0} P4_FALLBACK: DistATR={1:F2} RR={2:F2}",
+                zone.Id, Math.Abs(fallbackTP - entry) / atr, _config.MinRiskRewardRatio));
             double distATRFallback = Math.Abs(fallbackTP - entry) / atr;
             _logger.Info(string.Format("[DIAGNOSTICO][Risk] TP_SELECTED: Zone={0} Priority=P4_Fallback Type=Calculated Score=0.00 TF=-1 DistATR={1:F2} Age=0 Price={2:F2} RR={3:F2} Reason=NoStructuralTarget",
                 zone.Id, distATRFallback, fallbackTP, _config.MinRiskRewardRatio));
@@ -915,7 +1109,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// 3. Swing Low opuesto
         /// 4. Fallback: Entry - (SL - Entry) * MinRiskRewardRatio
         /// </summary>
-        private double CalculateStructuralTP_Sell(HeatZone zone, CoreEngine coreEngine, IBarDataProvider barData, int currentBar, double entry, double stopLoss)
+        private double CalculateStructuralTP_Sell(HeatZone zone, DecisionSnapshot snapshot, CoreEngine coreEngine, IBarDataProvider barData, int currentBar, double entry, double stopLoss)
         {
             double riskDistance = stopLoss - entry;
             double fallbackTP = entry - (riskDistance * _config.MinRiskRewardRatio);
@@ -930,6 +1124,14 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             DateTime analysisTimeTP = barData.GetBarTime(decisionTF_local, currentBar);
             int idxAtrDom = barData.GetBarIndexFromTime(zone.TFDominante, analysisTimeTP);
             double atr = idxAtrDom >= 0 ? barData.GetATR(zone.TFDominante, 14, idxAtrDom) : 1.0;
+
+            // V6.0f-FASE2: P0 - Buscar HeatZone opuesta PRIMERO (antes de P1/P2/P3)
+            double? opposingTP = GetOpposingZoneTP_Sell(zone, snapshot, barData, coreEngine, analysisTimeTP, entry, riskDistance, atr);
+            if (opposingTP.HasValue)
+            {
+                _logger.Info(string.Format("[RiskCalculator] [P0] TP Opposing Zone seleccionado: {0:F2}", opposingTP.Value));
+                return opposingTP.Value;
+            }
 
             // Recopilar Liquidity targets
             foreach (var tf in _config.TimeframesToUse.OrderByDescending(t => t))
@@ -1058,6 +1260,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             // 3. PRIORIDAD 3: Buscar Swing Low opuesto
             _logger.Debug("[RiskCalculator] [P3] Buscando Swing Low debajo de la zona (política RR>=Min y DistATR>=12, TF>=60 preferido)...");
             var swingCandidatesSell = new List<Tuple<SwingInfo,int,double,double>>();
+            int p3FilteredByPointsSell = 0; // V6.0f-OPT-B: contador para diagnóstico
             foreach (var tf in _config.TimeframesToUse)
             {
                 var swings = coreEngine.GetAllStructures(tf)
@@ -1067,49 +1270,134 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 foreach (var sw in swings)
                 {
                     double tpCand = sw.Low;
-                    double distATR = Math.Abs(entry - tpCand) / atr;
+                    double tpDistancePts = Math.Abs(entry - tpCand);
+                    
+                    // V6.0f-OPT-B: Pre-validación contra doble cerrojo (evita seleccionar y luego rechazar)
+                    if (tpDistancePts < 0.50 || tpDistancePts > _config.MaxTPDistancePoints)
+                    {
+                        p3FilteredByPointsSell++;
+                        continue; // Descartar este candidato
+                    }
+                    
+                    double distATR = tpDistancePts / atr;
                     double rrCand = riskDistance > 0 ? (entry - tpCand) / riskDistance : 0.0;
                     swingCandidatesSell.Add(Tuple.Create(sw, tf, distATR, rrCand));
                 }
             }
+            if (p3FilteredByPointsSell > 0)
+            {
+                _logger.Info(string.Format("[RISK][TP_FILTER] Zone={0} P3_SELL RemovedByPoints={1} (>{2}pts)", zone.Id, p3FilteredByPointsSell, _config.MaxTPDistancePoints));
+            }
             var primaryTPSell = swingCandidatesSell
-                .Where(c => c.Item2 >= 60 && c.Item4 >= _config.MinRiskRewardRatio && c.Item3 >= 12.0)
+                .Where(c => c.Item2 >= 60 && c.Item4 >= 1.0 && c.Item3 >= 6.0)
                 .OrderByDescending(c => c.Item2)
                 .ThenBy(c => c.Item3)
                 .FirstOrDefault();
             var chosenTPSell = primaryTPSell;
-            string tpReasonSell = "SwingP3_TF>=60_RR>=Min_Dist>=12";
+            string tpReasonSell = "SwingP3_TF>=60_RR>=1.0_Dist>=6";
             if (chosenTPSell == null)
             {
                 chosenTPSell = swingCandidatesSell
-                    .Where(c => c.Item4 >= _config.MinRiskRewardRatio && c.Item3 >= 12.0)
+                    .Where(c => c.Item4 >= 1.0 && c.Item3 >= 6.0)
                     .OrderByDescending(c => c.Item2 >= 60 ? 1 : 0)
                     .ThenBy(c => c.Item3)
                     .FirstOrDefault();
-                tpReasonSell = "SwingP3_ANYTF_RR>=Min_Dist>=12";
+                tpReasonSell = "SwingP3_ANYTF_RR>=1.0_Dist>=6";
             }
+            // V6.0e: Búsqueda de siguiente TP si el primero es rechazado por límite de puntos
             if (chosenTPSell != null)
             {
-                var sw = chosenTPSell.Item1; int tfSel = chosenTPSell.Item2; double distATRSelected = chosenTPSell.Item3; double rrSelected = chosenTPSell.Item4;
+                // Validar todos los candidatos contra límite de puntos (120pts)
+                var validCandidates = new List<Tuple<SwingInfo,int,double,double>>();
+                
+                // V6.0e PASO 2: Filtrar candidatos por TF con criterios específicos
+                var filteredCandidatesSell = swingCandidatesSell.Where(c => 
+                    c != chosenTPSell && 
+                    c.Item4 >= 1.0 && // RR >= 1.0 (todos)
+                    (
+                        (c.Item2 == 1440 && c.Item3 >= 8.0) || // TF1440: DistATR >= 8.0
+                        (c.Item2 != 1440 && c.Item3 >= 6.0)    // TF60/240/otros: DistATR >= 6.0
+                    )
+                );
+                
+                // Ordenar: TF descendente → DistATR ascendente → RR descendente
+                var orderedCandidatesSell = filteredCandidatesSell
+                    .OrderByDescending(c => c.Item2)      // TF alto primero (1440→240→60→15→5)
+                    .ThenBy(c => c.Item3)                 // DistATR más cerca
+                    .ThenByDescending(c => c.Item4);      // RR más alto
+                
+                // Primero intentar con el candidato elegido
+                foreach (var candidate in new[] { chosenTPSell }.Concat(orderedCandidatesSell))
+                {
+                    double tpPrice = candidate.Item1.Low;
+                    double tpDistancePts = Math.Abs(entry - tpPrice);
+                    
+                    if (tpDistancePts <= _config.MaxTPDistancePoints)
+                    {
+                        validCandidates.Add(candidate);
+                        _logger.Debug(string.Format("[RISK][TP_NEXT] Zone={0} Candidato TF={1} TP={2:F2} Dist={3:F2}pts RR={4:F2} DistATR={5:F2} PASS",
+                            zone.Id, candidate.Item2, tpPrice, tpDistancePts, candidate.Item4, candidate.Item3));
+                    }
+                    else
+                    {
+                        _logger.Debug(string.Format("[RISK][TP_NEXT] Zone={0} Candidato TF={1} TP={2:F2} Dist={3:F2}pts (>{4}) RECHAZADO por límite puntos",
+                            zone.Id, candidate.Item2, tpPrice, tpDistancePts, _config.MaxTPDistancePoints));
+                    }
+                }
+                
+                // Si hay candidatos válidos, usar el primero (mejor prioridad/distancia)
+                if (validCandidates.Count > 0)
+                {
+                    var finalCandidate = validCandidates.First();
+                    var sw = finalCandidate.Item1; int tfSel = finalCandidate.Item2; double distATRSelected = finalCandidate.Item3; double rrSelected = finalCandidate.Item4;
+                    double tp = sw.Low;
+                    int idxStructSel = barData.GetBarIndexFromTime(tfSel, analysisTimeTP);
+                    int ageSelected = idxStructSel >= 0 ? (idxStructSel - sw.CreatedAtBarIndex) : int.MaxValue;
+                    
+                    string selectionReason = (validCandidates.Count > 1) ? 
+                        string.Format("{0}_NextCandidate_{1}of{2}", tpReasonSell, validCandidates.IndexOf(finalCandidate) + 1, validCandidates.Count) : 
+                        tpReasonSell;
+                    
+                    _logger.Info(string.Format("[RISK][TP_POLICY] Zone={0} FORCED_P3: TF={1} DistATR={2:F2} RR={3:F2} Price={4:F2} (Candidatos validados: {5})",
+                        zone.Id, tfSel, distATRSelected, rrSelected, tp, validCandidates.Count));
+                    _logger.Info(string.Format("[DIAGNOSTICO][Risk] TP_SELECTED: Zone={0} Priority=P3 Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} RR={6:F2} Reason={7}",
+                        zone.Id, sw.Score, tfSel, distATRSelected, ageSelected, tp, rrSelected, selectionReason));
+                    zone.Metadata["TP_Structural"] = true;
+                    zone.Metadata["TP_TargetTF"] = tfSel;
+                    return tp;
+                }
+                else
+                {
+                    _logger.Warning(string.Format("[RISK][TP_POLICY] Zone={0} Todos los candidatos P3 rechazados por límite de puntos (>{1}). Cayendo a fallback.",
+                        zone.Id, _config.MaxTPDistancePoints));
+                }
+            }
+
+            // ANTES de fallback: verificar si existe P3 con criterios mínimos para forzar estructural
+            var forcedP3Sell = swingCandidatesSell
+                .Where(c => c.Item2 >= 60 && c.Item4 >= 1.0 && c.Item3 >= 6.0)
+                .OrderByDescending(c => c.Item2)
+                .ThenBy(c => c.Item3)
+                .FirstOrDefault();
+            
+            if (forcedP3Sell != null)
+            {
+                var sw = forcedP3Sell.Item1; int tfSel = forcedP3Sell.Item2; double distATRSelected = forcedP3Sell.Item3; double rrSelected = forcedP3Sell.Item4;
                 double tp = sw.Low;
                 int idxStructSel = barData.GetBarIndexFromTime(tfSel, analysisTimeTP);
                 int ageSelected = idxStructSel >= 0 ? (idxStructSel - sw.CreatedAtBarIndex) : int.MaxValue;
-                _logger.Info(string.Format("[RISK][TP_POLICY] Zone={0} Selected: TF={1} DistATR={2:F2} RR={3:F2} Price={4:F2} Reason={5}",
-                    zone.Id, tfSel, distATRSelected, rrSelected, tp, tpReasonSell));
-                _logger.Info(string.Format("[DIAGNOSTICO][Risk] TP_SELECTED: Zone={0} Priority=P3 Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} RR={6:F2} Reason={7}",
-                    zone.Id, sw.Score, tfSel, distATRSelected, ageSelected, tp, rrSelected, tpReasonSell));
+                _logger.Info(string.Format("[RISK][TP_POLICY] Zone={0} FORCED_P3 (evitando fallback): TF={1} DistATR={2:F2} RR={3:F2} Price={4:F2}",
+                    zone.Id, tfSel, distATRSelected, rrSelected, tp));
+                _logger.Info(string.Format("[DIAGNOSTICO][Risk] TP_SELECTED: Zone={0} Priority=P3 Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} RR={6:F2} Reason=ForcedP3_NoFallback",
+                    zone.Id, sw.Score, tfSel, distATRSelected, ageSelected, tp, rrSelected));
                 zone.Metadata["TP_Structural"] = true;
                 zone.Metadata["TP_TargetTF"] = tfSel;
                 return tp;
             }
-            else
-            {
-                _logger.Debug("[RiskCalculator] [P3] No hay swings que cumplan RR>=Min y DistATR>=12");
-            }
 
-            // 4. FALLBACK: R:R mínimo
-            _logger.Warning(string.Format("[RiskCalculator] ⚠ [P4] FALLBACK: No se encontró target estructural válido, usando R:R mínimo @ {0:F2}",
-                fallbackTP));
+            // 4. FALLBACK: R:R mínimo (solo si NO hay P3 válido)
+            _logger.Warning(string.Format("[RISK][TP_POLICY] Zone={0} P4_FALLBACK: DistATR={1:F2} RR={2:F2}",
+                zone.Id, Math.Abs(entry - fallbackTP) / atr, _config.MinRiskRewardRatio));
             double distATRFallback = Math.Abs(entry - fallbackTP) / atr;
             _logger.Info(string.Format("[DIAGNOSTICO][Risk] TP_SELECTED: Zone={0} Priority=P4_Fallback Type=Calculated Score=0.00 TF=-1 DistATR={1:F2} Age=0 Price={2:F2} RR={3:F2} Reason=NoStructuralTarget",
                 zone.Id, distATRFallback, fallbackTP, _config.MinRiskRewardRatio));
@@ -1197,13 +1485,13 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 // CRÍTICO: Calcular edad en barras del TF de la estructura, no del gráfico
                 int idxAtTime2 = barData.GetBarIndexFromTime(c.Item2, _currentAnalysisTime);
                 int age = idxAtTime2 >= 0 ? (idxAtTime2 - c.Item1.CreatedAtBarIndex) : int.MaxValue;
-                bool isInBand = (c.Item3 >= 10.0 && c.Item3 <= 15.0);
+                bool isInBand = (c.Item3 >= 8.0 && c.Item3 <= 15.0);
                 _logger.Info(string.Format(
                     "[DIAGNOSTICO][Risk] SL_CANDIDATE: Idx={0} Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} InBand={6}",
                     idx, c.Item1.Score, c.Item2, c.Item3, age, c.Item1.Low, isInBand));
             }
-            // Banda objetivo [10,15], target 12.5 (actualizado en V5.6.9g)
-            const double bandMin = 10.0, bandMax = 15.0, target = 12.5;
+            // Banda objetivo [8,15], target 11.5 (actualizado en V6.0 - Recalibración post-MTF)
+            const double bandMin = 8.0, bandMax = 15.0, target = 11.5;
             var inBand = candidates.Where(c => c.Item3 >= bandMin && c.Item3 <= bandMax)
                                    .OrderBy(c => Math.Abs(c.Item3 - target))
                                    .ThenByDescending(c => c.Item3) // preferir más cercano a bandMax si empata
@@ -1313,13 +1601,13 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 // CRÍTICO: Calcular edad en barras del TF de la estructura, no del gráfico
                 int idxAtTime3 = barData.GetBarIndexFromTime(c.Item2, _currentAnalysisTime);
                 int age = idxAtTime3 >= 0 ? (idxAtTime3 - c.Item1.CreatedAtBarIndex) : int.MaxValue;
-                bool isInBand = (c.Item3 >= 10.0 && c.Item3 <= 15.0);
+                bool isInBand = (c.Item3 >= 8.0 && c.Item3 <= 15.0);
                 _logger.Info(string.Format(
                     "[DIAGNOSTICO][Risk] SL_CANDIDATE: Idx={0} Type=Swing Score={1:F2} TF={2} DistATR={3:F2} Age={4} Price={5:F2} InBand={6}",
                     idx, c.Item1.Score, c.Item2, c.Item3, age, c.Item1.High, isInBand));
             }
 
-            const double bandMin = 10.0, bandMax = 15.0, target = 12.5;
+            const double bandMin = 8.0, bandMax = 15.0, target = 11.5;
             var inBand = candidates.Where(c => c.Item3 >= bandMin && c.Item3 <= bandMax)
                                    .OrderBy(c => Math.Abs(c.Item3 - target))
                                    .ThenByDescending(c => c.Item3)
@@ -1553,6 +1841,416 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             return allSwings
                 .OrderByDescending(s => s.Low) // Más cercano por precio (el más alto de los que están debajo)
                 .FirstOrDefault();
+        }
+
+        // ========================================================================
+        // FASE 2: OPPOSING HEATZONE PARA TP INTELIGENTE
+        // ========================================================================
+
+        /// <summary>
+        /// V6.0f-FASE2: Calcula score para TP basado en HeatZone opuesta.
+        /// Scoring multi-criterio: CoreScore (30%), ProximityFactor (20%), R:R óptimo (25%), DistanceATR óptimo (25%)
+        /// </summary>
+        private double CalculateTPScore(HeatZone opposingZone, double rr, double distanceATR)
+        {
+            // Extraer scores de la zona opuesta
+            double coreScore = opposingZone.Metadata.ContainsKey("CoreScore") ? 
+                (double)opposingZone.Metadata["CoreScore"] : 0.0;
+            double proximityFactor = opposingZone.Metadata.ContainsKey("ProximityFactor") ? 
+                (double)opposingZone.Metadata["ProximityFactor"] : 0.0;
+            
+            // Scoring de R:R óptimo [1.2, 3.0]
+            double rrScore = (rr >= 1.2 && rr <= 3.0) ? 0.25 : 0.0;
+            
+            // Scoring de DistanceATR óptimo [6, 20]
+            double distScore = (distanceATR >= 6.0 && distanceATR <= 20.0) ? 0.25 : 0.0;
+            
+            // Score final ponderado
+            return (coreScore * 0.30) + (proximityFactor * 0.20) + rrScore + distScore;
+        }
+
+        /// <summary>
+        /// V6.0f-FASE2: Busca HeatZone opuesta para TP (LONG).
+        /// P0: Nearest opposing HeatZone (resistencia BEAR arriba del entry)
+        /// Configuración: Borde más cercano (Low), ATR del TF opuesto, RR [1.2, 3.0], DistATR [6, 20]
+        /// </summary>
+        private double? GetOpposingZoneTP_Buy(
+            HeatZone zone, 
+            DecisionSnapshot snapshot, 
+            IBarDataProvider barData,
+            CoreEngine coreEngine,
+            DateTime analysisTime,
+            double entry, 
+            double riskDistance,
+            double atrFallback)
+        {
+            // DEBUG: Estadísticas iniciales
+            int totalZones = snapshot.HeatZones.Count;
+            var bearZones = snapshot.HeatZones.Where(z => z.Direction == "Bear").ToList();
+            var bearZonesAbove = bearZones.Where(z => z.Low > entry).ToList();
+            
+            _logger.Info(string.Format("[RISK][P0_DEBUG] Zone={0} BUY: TotalZones={1} BearZones={2} BearAbove={3} Entry={4:F2}",
+                zone.Id, totalZones, bearZones.Count, bearZonesAbove.Count, entry));
+            
+            // Buscar HeatZones BEAR (resistencias) por encima del entry
+            var allCandidates = bearZonesAbove
+                .Select(z => {
+                    // 1A: Usar borde más cercano (Low de zona BEAR = primer contacto)
+                    double tp = z.Low;
+                    double distance = Math.Abs(tp - entry);
+                    
+                    // 2A: ATR del TF dominante de la zona opuesta
+                    int opposingZoneTF = z.TFDominante;
+                    int idxOpposing = barData.GetBarIndexFromTime(opposingZoneTF, analysisTime);
+                    double atrOpposing = (idxOpposing >= 0) ? 
+                        barData.GetATR(opposingZoneTF, 14, idxOpposing) : atrFallback;
+                    if (atrOpposing <= 0) atrOpposing = atrFallback; // safety fallback
+                    
+                    double distanceATR = distance / atrOpposing;
+                    double rr = distance / riskDistance;
+                    
+                    // Scoring multi-criterio
+                    double score = CalculateTPScore(z, rr, distanceATR);
+                    
+                    return new {
+                        Zone = z,
+                        TP = tp,
+                        Distance = distance,
+                        DistanceATR = distanceATR,
+                        RR = rr,
+                        Score = score,
+                        ATROpposing = atrOpposing
+                    };
+                })
+                .ToList();
+            
+            // DEBUG: Mostrar todos los candidatos antes de filtrar
+            foreach (var c in allCandidates.Take(5)) // Mostrar top 5
+            {
+                _logger.Info(string.Format("[RISK][P0_DEBUG] Candidate: ZoneId={0} TP={1:F2} RR={2:F2} DistATR={3:F2} Score={4:F2}",
+                    c.Zone.Id, c.TP, c.RR, c.DistanceATR, c.Score));
+            }
+            
+            var afterRRFilter = allCandidates.Where(c => c.RR >= 1.2 && c.RR <= 3.0).ToList();
+            var opposingCandidates = afterRRFilter.Where(c => c.DistanceATR >= 6.0 && c.DistanceATR <= 20.0)
+                .OrderByDescending(c => c.Score)
+                .ToList();
+            
+            _logger.Info(string.Format("[RISK][P0_DEBUG] Zone={0} BUY Filters: AllCandidates={1} AfterRR[1.2-3.0]={2} AfterDistATR[6-20]={3}",
+                zone.Id, allCandidates.Count, afterRRFilter.Count, opposingCandidates.Count));
+
+            if (opposingCandidates.Any())
+            {
+                var best = opposingCandidates.First();
+                
+                // Log traza P0_OPPOSING
+                _logger.Info(string.Format(
+                    "[RISK][TP_POLICY] Zone={0} P0_OPPOSING: ZoneId={1} Dir={2} TF={3} Score={4:F2} RR={5:F2} DistATR={6:F2} TP={7:F2} ATR={8:F2}",
+                    zone.Id, best.Zone.Id, best.Zone.Direction, best.Zone.TFDominante, 
+                    best.Score, best.RR, best.DistanceATR, best.TP, best.ATROpposing
+                ));
+                
+                // Marcar como estructural y guardar metadata
+                zone.Metadata["TP_Structural"] = true;
+                zone.Metadata["TP_TargetTF"] = best.Zone.TFDominante;
+                zone.Metadata["TP_OpposingZone"] = true;
+                zone.Metadata["TP_OpposingZoneId"] = best.Zone.Id;
+                
+                return best.TP;
+            }
+            
+            // Diagnóstico adicional: conteos arriba/abajo y por dirección
+            int anyZonesAbove = snapshot.HeatZones.Where(z => z.Low > entry).Count();
+            int anyZonesBelow = snapshot.HeatZones.Where(z => z.High < entry).Count();
+            int sameDirAbove = snapshot.HeatZones.Where(z => z.Direction == zone.Direction && z.Low > entry).Count();
+            int sameDirBelow = snapshot.HeatZones.Where(z => z.Direction == zone.Direction && z.High < entry).Count();
+            _logger.Info(string.Format("[RISK][P0_DEBUG] Zone={0} Direction={1} Entry={2:F2} | AnyAbove={3} AnyBelow={4} | SameDirAbove={5} SameDirBelow={6}",
+                zone.Id, zone.Direction, entry, anyZonesAbove, anyZonesBelow, sameDirAbove, sameDirBelow));
+            
+            // P0b: si no hay opuesta, usar cualquier HeatZone por encima (sin filtrar dirección). Target = High.
+            var anyCandidates = snapshot.HeatZones
+                .Where(z => z.Id != zone.Id) // Excluir la propia zona
+                .Where(z => z.Low > entry) // Por encima del entry
+                .Select(z => {
+                    double tp = z.High; // Borde de salida para BUY
+                    double distance = Math.Abs(tp - entry);
+                    
+                    // Guardarraíl: descartar TPs muy cercanos o que excedan límite de puntos (V6.0f-OPT-B)
+                    if (distance < 0.50 || distance > _config.MaxTPDistancePoints) return null;
+                    
+                    int tf = z.TFDominante;
+                    int idx = barData.GetBarIndexFromTime(tf, analysisTime);
+                    double atrZ = (idx >= 0) ? barData.GetATR(tf, 14, idx) : atrFallback;
+                    if (atrZ <= 0) atrZ = atrFallback;
+                    double distATR = distance / atrZ;
+                    double rr = distance / riskDistance;
+                    double score = CalculateTPScore(z, rr, distATR);
+                    return new { Zone = z, TP = tp, RR = rr, DistanceATR = distATR, Score = score, ATRz = atrZ };
+                })
+                .Where(c => c != null) // Filtrar nulls del guardarraíl
+                .ToList();
+            
+            var anyFiltered = anyCandidates
+                .Where(c => c.RR >= 1.2 && c.RR <= 3.0)
+                .Where(c => c.DistanceATR >= 6.0 && c.DistanceATR <= 20.0)
+                .OrderByDescending(c => c.Score)
+                .ToList();
+            
+            _logger.Info(string.Format("[RISK][P0_DEBUG] Zone={0} BUY AnyDir Filters: All={1} AfterRR={2} AfterDistATR={3}",
+                zone.Id, anyCandidates.Count, anyCandidates.Count(c => c.RR >= 1.2 && c.RR <= 3.0), anyFiltered.Count));
+            
+            if (anyFiltered.Any())
+            {
+                var bestAny = anyFiltered.First();
+                _logger.Info(string.Format(
+                    "[RISK][TP_POLICY] Zone={0} P0_ANY_DIR: ZoneId={1} Dir={2} TF={3} Score={4:F2} RR={5:F2} DistATR={6:F2} TP={7:F2} ATR={8:F2}",
+                    zone.Id, bestAny.Zone.Id, bestAny.Zone.Direction, bestAny.Zone.TFDominante,
+                    bestAny.Score, bestAny.RR, bestAny.DistanceATR, bestAny.TP, bestAny.ATRz
+                ));
+                zone.Metadata["TP_Structural"] = true;
+                zone.Metadata["TP_TargetTF"] = bestAny.Zone.TFDominante;
+                zone.Metadata["TP_OpposingZone"] = false;
+                zone.Metadata["TP_AnyDirZoneId"] = bestAny.Zone.Id;
+                return bestAny.TP;
+            }
+            
+            // P0c: Swing Lite (respaldo final) - Solo TF 15/60 con criterios relajados
+            var swingCandidates = new List<int> { 15, 60 }
+                .SelectMany(tf => coreEngine.GetAllStructures(tf).OfType<SwingInfo>())
+                .Where(s => s.IsActive && s.IsHigh && s.High > entry)
+                .Select(s => {
+                    double tp = s.High;
+                    double distance = Math.Abs(tp - entry);
+                    
+                    // Guardarraíl: distancia mínima y máxima (V6.0f-OPT-B: usa config para consistencia con doble cerrojo)
+                    if (distance < 0.50 || distance > _config.MaxTPDistancePoints) return null;
+                    
+                    // ATR del swing seleccionado
+                    int idx = barData.GetBarIndexFromTime(s.TF, analysisTime);
+                    double atrSwing = (idx >= 0) ? barData.GetATR(s.TF, 14, idx) : atrFallback;
+                    if (atrSwing <= 0) atrSwing = atrFallback;
+                    
+                    double distATR = distance / atrSwing;
+                    double rr = distance / riskDistance;
+                    
+                    // Filtros P0c
+                    if (distATR < 6.0 || rr < 1.2) return null;
+                    
+                    return new { Swing = s, TP = tp, RR = rr, DistATR = distATR, ATRSwing = atrSwing };
+                })
+                .Where(c => c != null)
+                .OrderByDescending(c => c.RR)
+                .ThenBy(c => c.DistATR)
+                .FirstOrDefault();
+            
+            if (swingCandidates != null)
+            {
+                _logger.Info(string.Format(
+                    "[RISK][TP_POLICY] Zone={0} P0_SWING_LITE: TF={1} Score={2:F2} RR={3:F2} DistATR={4:F2} TP={5:F2} ATR={6:F2}",
+                    zone.Id, swingCandidates.Swing.TF, swingCandidates.Swing.Score,
+                    swingCandidates.RR, swingCandidates.DistATR, swingCandidates.TP, swingCandidates.ATRSwing
+                ));
+                zone.Metadata["TP_Structural"] = true;
+                zone.Metadata["TP_TargetTF"] = swingCandidates.Swing.TF;
+                zone.Metadata["TP_OpposingZone"] = false;
+                zone.Metadata["TP_SwingLiteId"] = swingCandidates.Swing.Id;
+                return swingCandidates.TP;
+            }
+            
+            _logger.Info(string.Format("[RISK][P0_DEBUG] Zone={0} BUY: No opposing/any-dir/swing-lite found", zone.Id));
+            return null; // No hay candidato P0
+        }
+
+        /// <summary>
+        /// V6.0f-FASE2: Busca HeatZone opuesta para TP (SHORT).
+        /// P0: Nearest opposing HeatZone (soporte BULL debajo del entry)
+        /// Configuración: Borde más cercano (High), ATR del TF opuesto, RR [1.2, 3.0], DistATR [6, 20]
+        /// </summary>
+        private double? GetOpposingZoneTP_Sell(
+            HeatZone zone, 
+            DecisionSnapshot snapshot, 
+            IBarDataProvider barData,
+            CoreEngine coreEngine,
+            DateTime analysisTime,
+            double entry, 
+            double riskDistance,
+            double atrFallback)
+        {
+            // DEBUG: Estadísticas iniciales
+            int totalZones = snapshot.HeatZones.Count;
+            var bullZones = snapshot.HeatZones.Where(z => z.Direction == "Bull").ToList();
+            var bullZonesBelow = bullZones.Where(z => z.High < entry).ToList();
+            
+            _logger.Info(string.Format("[RISK][P0_DEBUG] Zone={0} SELL: TotalZones={1} BullZones={2} BullBelow={3} Entry={4:F2}",
+                zone.Id, totalZones, bullZones.Count, bullZonesBelow.Count, entry));
+            
+            // Buscar HeatZones BULL (soportes) por debajo del entry
+            var allCandidates = bullZonesBelow
+                .Select(z => {
+                    // 1A: Usar borde más cercano (High de zona BULL = primer contacto)
+                    double tp = z.High;
+                    double distance = Math.Abs(entry - tp);
+                    
+                    // 2A: ATR del TF dominante de la zona opuesta
+                    int opposingZoneTF = z.TFDominante;
+                    int idxOpposing = barData.GetBarIndexFromTime(opposingZoneTF, analysisTime);
+                    double atrOpposing = (idxOpposing >= 0) ? 
+                        barData.GetATR(opposingZoneTF, 14, idxOpposing) : atrFallback;
+                    if (atrOpposing <= 0) atrOpposing = atrFallback; // safety fallback
+                    
+                    double distanceATR = distance / atrOpposing;
+                    double rr = distance / riskDistance;
+                    
+                    // Scoring multi-criterio
+                    double score = CalculateTPScore(z, rr, distanceATR);
+                    
+                    return new {
+                        Zone = z,
+                        TP = tp,
+                        Distance = distance,
+                        DistanceATR = distanceATR,
+                        RR = rr,
+                        Score = score,
+                        ATROpposing = atrOpposing
+                    };
+                })
+                .ToList();
+            
+            // DEBUG: Mostrar todos los candidatos antes de filtrar
+            foreach (var c in allCandidates.Take(5)) // Mostrar top 5
+            {
+                _logger.Info(string.Format("[RISK][P0_DEBUG] Candidate: ZoneId={0} TP={1:F2} RR={2:F2} DistATR={3:F2} Score={4:F2}",
+                    c.Zone.Id, c.TP, c.RR, c.DistanceATR, c.Score));
+            }
+            
+            var afterRRFilter = allCandidates.Where(c => c.RR >= 1.2 && c.RR <= 3.0).ToList();
+            var opposingCandidates = afterRRFilter.Where(c => c.DistanceATR >= 6.0 && c.DistanceATR <= 20.0)
+                .OrderByDescending(c => c.Score)
+                .ToList();
+            
+            _logger.Info(string.Format("[RISK][P0_DEBUG] Zone={0} SELL Filters: AllCandidates={1} AfterRR[1.2-3.0]={2} AfterDistATR[6-20]={3}",
+                zone.Id, allCandidates.Count, afterRRFilter.Count, opposingCandidates.Count));
+
+            if (opposingCandidates.Any())
+            {
+                var best = opposingCandidates.First();
+                
+                // Log traza P0_OPPOSING
+                _logger.Info(string.Format(
+                    "[RISK][TP_POLICY] Zone={0} P0_OPPOSING: ZoneId={1} Dir={2} TF={3} Score={4:F2} RR={5:F2} DistATR={6:F2} TP={7:F2} ATR={8:F2}",
+                    zone.Id, best.Zone.Id, best.Zone.Direction, best.Zone.TFDominante, 
+                    best.Score, best.RR, best.DistanceATR, best.TP, best.ATROpposing
+                ));
+                
+                // Marcar como estructural y guardar metadata
+                zone.Metadata["TP_Structural"] = true;
+                zone.Metadata["TP_TargetTF"] = best.Zone.TFDominante;
+                zone.Metadata["TP_OpposingZone"] = true;
+                zone.Metadata["TP_OpposingZoneId"] = best.Zone.Id;
+                
+                return best.TP;
+            }
+            
+            // Diagnóstico adicional: conteos arriba/abajo y por dirección
+            int anyZonesAbove = snapshot.HeatZones.Where(z => z.Low > entry).Count();
+            int anyZonesBelow = snapshot.HeatZones.Where(z => z.High < entry).Count();
+            int sameDirAbove = snapshot.HeatZones.Where(z => z.Direction == zone.Direction && z.Low > entry).Count();
+            int sameDirBelow = snapshot.HeatZones.Where(z => z.Direction == zone.Direction && z.High < entry).Count();
+            _logger.Info(string.Format("[RISK][P0_DEBUG] Zone={0} Direction={1} Entry={2:F2} | AnyAbove={3} AnyBelow={4} | SameDirAbove={5} SameDirBelow={6}",
+                zone.Id, zone.Direction, entry, anyZonesAbove, anyZonesBelow, sameDirAbove, sameDirBelow));
+            
+            // P0b: si no hay opuesta, usar cualquier HeatZone por debajo (sin filtrar dirección). Target = Low.
+            var anyCandidates = snapshot.HeatZones
+                .Where(z => z.Id != zone.Id) // Excluir la propia zona
+                .Where(z => z.High < entry) // Por debajo del entry
+                .Select(z => {
+                    double tp = z.Low; // Borde de salida para SELL
+                    double distance = Math.Abs(entry - tp);
+                    
+                    // Guardarraíl: descartar TPs muy cercanos o que excedan límite de puntos (V6.0f-OPT-B)
+                    if (distance < 0.50 || distance > _config.MaxTPDistancePoints) return null;
+                    
+                    int tf = z.TFDominante;
+                    int idx = barData.GetBarIndexFromTime(tf, analysisTime);
+                    double atrZ = (idx >= 0) ? barData.GetATR(tf, 14, idx) : atrFallback;
+                    if (atrZ <= 0) atrZ = atrFallback;
+                    double distATR = distance / atrZ;
+                    double rr = distance / riskDistance;
+                    double score = CalculateTPScore(z, rr, distATR);
+                    return new { Zone = z, TP = tp, RR = rr, DistanceATR = distATR, Score = score, ATRz = atrZ };
+                })
+                .Where(c => c != null) // Filtrar nulls del guardarraíl
+                .ToList();
+            
+            var anyFiltered = anyCandidates
+                .Where(c => c.RR >= 1.2 && c.RR <= 3.0)
+                .Where(c => c.DistanceATR >= 6.0 && c.DistanceATR <= 20.0)
+                .OrderByDescending(c => c.Score)
+                .ToList();
+            
+            _logger.Info(string.Format("[RISK][P0_DEBUG] Zone={0} SELL AnyDir Filters: All={1} AfterRR={2} AfterDistATR={3}",
+                zone.Id, anyCandidates.Count, anyCandidates.Count(c => c.RR >= 1.2 && c.RR <= 3.0), anyFiltered.Count));
+            
+            if (anyFiltered.Any())
+            {
+                var bestAny = anyFiltered.First();
+                _logger.Info(string.Format(
+                    "[RISK][TP_POLICY] Zone={0} P0_ANY_DIR: ZoneId={1} Dir={2} TF={3} Score={4:F2} RR={5:F2} DistATR={6:F2} TP={7:F2} ATR={8:F2}",
+                    zone.Id, bestAny.Zone.Id, bestAny.Zone.Direction, bestAny.Zone.TFDominante,
+                    bestAny.Score, bestAny.RR, bestAny.DistanceATR, bestAny.TP, bestAny.ATRz
+                ));
+                zone.Metadata["TP_Structural"] = true;
+                zone.Metadata["TP_TargetTF"] = bestAny.Zone.TFDominante;
+                zone.Metadata["TP_OpposingZone"] = false;
+                zone.Metadata["TP_AnyDirZoneId"] = bestAny.Zone.Id;
+                return bestAny.TP;
+            }
+            
+            // P0c: Swing Lite (respaldo final) - Solo TF 15/60 con criterios relajados
+            var swingCandidates = new List<int> { 15, 60 }
+                .SelectMany(tf => coreEngine.GetAllStructures(tf).OfType<SwingInfo>())
+                .Where(s => s.IsActive && !s.IsHigh && s.Low < entry)
+                .Select(s => {
+                    double tp = s.Low;
+                    double distance = Math.Abs(entry - tp);
+                    
+                    // Guardarraíl: distancia mínima y máxima (V6.0f-OPT-B: usa config para consistencia con doble cerrojo)
+                    if (distance < 0.50 || distance > _config.MaxTPDistancePoints) return null;
+                    
+                    // ATR del swing seleccionado
+                    int idx = barData.GetBarIndexFromTime(s.TF, analysisTime);
+                    double atrSwing = (idx >= 0) ? barData.GetATR(s.TF, 14, idx) : atrFallback;
+                    if (atrSwing <= 0) atrSwing = atrFallback;
+                    
+                    double distATR = distance / atrSwing;
+                    double rr = distance / riskDistance;
+                    
+                    // Filtros P0c
+                    if (distATR < 6.0 || rr < 1.2) return null;
+                    
+                    return new { Swing = s, TP = tp, RR = rr, DistATR = distATR, ATRSwing = atrSwing };
+                })
+                .Where(c => c != null)
+                .OrderByDescending(c => c.RR)
+                .ThenBy(c => c.DistATR)
+                .FirstOrDefault();
+            
+            if (swingCandidates != null)
+            {
+                _logger.Info(string.Format(
+                    "[RISK][TP_POLICY] Zone={0} P0_SWING_LITE: TF={1} Score={2:F2} RR={3:F2} DistATR={4:F2} TP={5:F2} ATR={6:F2}",
+                    zone.Id, swingCandidates.Swing.TF, swingCandidates.Swing.Score,
+                    swingCandidates.RR, swingCandidates.DistATR, swingCandidates.TP, swingCandidates.ATRSwing
+                ));
+                zone.Metadata["TP_Structural"] = true;
+                zone.Metadata["TP_TargetTF"] = swingCandidates.Swing.TF;
+                zone.Metadata["TP_OpposingZone"] = false;
+                zone.Metadata["TP_SwingLiteId"] = swingCandidates.Swing.Id;
+                return swingCandidates.TP;
+            }
+            
+            _logger.Info(string.Format("[RISK][P0_DEBUG] Zone={0} SELL: No opposing/any-dir/swing-lite found", zone.Id));
+            return null; // No hay candidato P0
         }
     }
 }

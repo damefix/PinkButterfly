@@ -565,6 +565,21 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                         if (_fileLogger != null) _fileLogger.Info($"[SYNC] TF={tf} from={begin} to={end} steps={end - begin + 1}");
                         for (int i = begin; i <= end; i++)
                         {
+                            // V6.0g: TRAZAS OHLC para análisis MFE/MAE (solo TF5 para granularidad máxima sin saturar el log)
+                            if (tf == 5 && _fileLogger != null)
+                            {
+                                try
+                                {
+                                    double o = _barDataProvider.GetOpen(tf, i);
+                                    double h = _barDataProvider.GetHigh(tf, i);
+                                    double l = _barDataProvider.GetLow(tf, i);
+                                    double c = _barDataProvider.GetClose(tf, i);
+                                    DateTime barTime = _barDataProvider.GetBarTime(tf, i);
+                                    _fileLogger.Info($"[OHLC] TF={tf} Bar={i} Time={barTime:yyyy-MM-dd HH:mm:ss} O={o:F2} H={h:F2} L={l:F2} C={c:F2}");
+                                }
+                                catch { /* Ignorar errores en trazas OHLC */ }
+                            }
+                            
                             _coreEngine.OnBarClose(tf, i);
                         }
                         _lastProcessedIndexPerTF[tf] = end;
@@ -676,6 +691,13 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
                 // Obtener el DominantStructureId de la decisión
                 string sourceStructureId = _lastDecision.DominantStructureId ?? string.Empty;
+
+                // Pre-gate: no intentar registrar si ya hay operación activa (evita SKIP_CONCURRENCY innecesario)
+                int activeCount = _tradeManager.GetActiveTrades().Count;
+                if (activeCount >= _config.MaxConcurrentTrades)
+                {
+                    return; // Salir silenciosamente sin intentar registrar
+                }
 
                 _tradeManager.RegisterTrade(
                     _lastDecision.Action,
