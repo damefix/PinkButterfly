@@ -873,6 +873,19 @@ foreach ($match in $dictValues) {
     }
 }
 
+# 2b. HashSet<string> sin OrderBy al enumerar (OPCIONAL)
+$hashSetEnum = Select-String -Path "pinkbutterfly-produccion\*.cs" `
+    -Pattern 'HashSet<string>' `
+    -Context 0,5
+
+foreach ($match in $hashSetEnum) {
+    # Buscar si se enumera sin OrderBy en las siguientes líneas
+    if ($match.Context.PostContext -match 'foreach.*\(' -and 
+        $match.Context.PostContext -notmatch 'OrderBy') {
+        $violations += "WARN: HashSet<string> enumerado sin OrderBy en $($match.Filename):$($match.LineNumber)"
+    }
+}
+
 # 3. First/Last sin OrderBy previo en mismo statement
 $firstNoOrder = Select-String -Path "pinkbutterfly-produccion\*.cs" `
     -Pattern '\.(First|Last)(OrDefault)?\(\)' `
@@ -1057,6 +1070,71 @@ if ($LASTEXITCODE -ne 0) {
 
 ---
 
+### FASE 3B: VALIDACIÓN EXTENDIDA CON 20000 BARRAS (OPCIONAL)
+
+**Objetivo:** Validar que el determinismo se mantiene con ventanas históricas más largas (cubrir el caso que fallaba previamente).
+
+**Protocolo:**
+
+1. **Modificar configuración:**
+   ```csharp
+   // EngineConfig.cs línea 681:
+   public int BacktestBarsForAnalysis { get; set; } = 20000; // ~208 días en 15m
+   ```
+
+2. **Compilar y copiar a NinjaTrader**
+
+3. **Repetir protocolo de validación FASE 3:**
+   - Borrar `brain_state.json`
+   - Verificar `AutoSaveEnabled = false`, `EnableFastLoad = false`
+   - Reiniciar NinjaTrader
+   - Ejecutar 3 backtests consecutivos
+   - Comparar hashes SHA256
+
+4. **Criterio de éxito:**
+   ```powershell
+   # Los 3 backtests con 20000 barras deben ser idénticos entre sí
+   # Y además, las operaciones en el periodo común (últimos ~52 días)
+   # deben coincidir con las del backtest de 5000 barras
+   ```
+
+**Validación cruzada 5000 vs 20000:**
+```powershell
+# Comparar que el periodo común tiene las mismas operaciones
+$csv_5k = Import-Csv "test1_5000bars.csv"
+$csv_20k = Import-Csv "test1_20000bars.csv"
+
+# Operaciones en los últimos 52 días (común a ambos)
+$fecha_comun = (Get-Date).AddDays(-52)
+$ops_5k = $csv_5k | Where-Object {[datetime]$_.Status -ge $fecha_comun -and $_.Action -eq "CLOSED"}
+$ops_20k = $csv_20k | Where-Object {[datetime]$_.Status -ge $fecha_comun -and $_.Action -eq "CLOSED"}
+
+Write-Output "Operaciones 5k en periodo común: $($ops_5k.Count)"
+Write-Output "Operaciones 20k en periodo común: $($ops_20k.Count)"
+
+# Deben ser iguales
+if ($ops_5k.Count -eq $ops_20k.Count) {
+    Write-Output "✅ Mismo número de operaciones en periodo común"
+    
+    # Comparar las primeras 5 operaciones
+    for ($i=0; $i -lt 5; $i++) {
+        if ($ops_5k[$i].Entry -eq $ops_20k[$i].Entry -and 
+            $ops_5k[$i].Status -eq $ops_20k[$i].Status) {
+            Write-Output "  ✅ Op $i coincide"
+        } else {
+            Write-Output "  ❌ Op $i difiere"
+        }
+    }
+} else {
+    Write-Output "❌ Diferente número de operaciones - FALLO"
+}
+```
+
+**Nota:** Esta validación extendida es **opcional** pero recomendada para confirmar que el fix de anclaje temporal (P0+.2) funciona correctamente cuando se implemente.
+
+---
+
 *Auditoría generada y actualizada con hallazgos científicos adicionales - 2025-11-06*
 *Rama: fix/determinismo-completo*
+*Versión: 1.0 - COMPLETA Y APROBADA*
 
