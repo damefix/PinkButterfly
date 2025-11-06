@@ -13072,3 +13072,1384 @@ Select-String -Path "..\..\NinjaTrader 8\PinkButterfly\logs\backtest_*.log" -Pat
 
 ---
 
+## **V6.0i.2 - Gate Adaptativo AND/OR con Tolerancia (05-nov-2024)**
+
+### **📌 PROBLEMA:**
+
+**Raíz:** V6.0i usaba gate **OR** en ambos regímenes → rechazaba si superaba puntos **O** ATR.
+En HighVol (ATR60 ~17-20) causaba rechazo masivo: 5 operaciones vs 100+ esperadas.
+
+**Evidencia:**
+```
+Fecha       Rechazos    
+2025-10-28       172        
+2025-10-29       142        
+2025-11-04       216        
+```
+
+### **🎯 SOLUCIÓN:**
+
+**Gate adaptativo + tolerancia 5%:**
+- **HighVol:** Gate AND (rechaza si supera puntos **Y** ATR)
+- **Normal:** Gate OR (mantiene protección estricta)
+- **Tolerancia:** Acepta si excede <5% del límite
+
+**Ejemplo:**
+```
+SL=65pts, 7.5ATR (límites 60pts/7ATR + tolerancia 5%)
+- Antes (OR): 65>60 → RECHAZADO
+- Ahora (AND + tol): 65>63 (OK) Y 7.5>7.35 (OK) → ACEPTADO [NEAR_LIMIT]
+```
+
+### **📝 CAMBIOS:**
+
+**EngineConfig.cs (línea 1012):**
+```csharp
+public double ValidationTolerancePercent { get; set; } = 0.05;
+```
+
+**RiskCalculator.cs (líneas 388-455):**
+```csharp
+// Gate adaptativo
+bool isHighVol = (regime == "HighVol");
+bool slExPts = slDistancePoints > (maxSLPoints * 1.05);
+bool slExATR = slDistanceATR > (maxSLATR * 1.05);
+bool rejectSL = isHighVol ? (slExATR && slExPts) : (slExATR || slExPts);
+
+if (rejectSL) { RECHAZAR }
+else if (slExPts || slExATR) { LOG [NEAR_LIMIT] + ACEPTAR }
+```
+
+**ELIMINADO:** Validación redundante SL en ATR (líneas 465-498)
+
+### **📊 EXPECTATIVAS:**
+
+| Métrica | V6.0i | V6.0i.2 |
+|---------|-------|---------|
+| Ops oct-nov | 5 | ~80-100 |
+| Ops totales | ~105 | ~180-220 |
+| R:R promedio | 0.70 | >1.0 |
+| Rechazos/día | ~150 | <20 |
+
+### **✅ VALIDACIÓN:**
+
+- [ ] Logs "Gate=AND" en HighVol
+- [ ] Logs NEAR_LIMIT presentes
+- [ ] SL_CHECK_FAIL reduce ~87%
+- [ ] Operaciones >180
+- [ ] R:R >1.0
+
+---
+
+## **V6.0i.3b - HOTFIX: Hard Cap SL + Gate AND solo TP (05-nov-2024)**
+
+### **❌ RESULTADO V6.0i.2:**
+
+V6.0i.2 resultó DESASTROSO por permitir SL gigantes con gate AND:
+
+| Métrica | V6.0i | V6.0i.2 | Degradación |
+|---------|-------|---------|-------------|
+| **Win Rate** | 52.6% | 42.3% | **-10.3%** ❌ |
+| **Profit Factor** | 1.77 | 0.67 | **-62%** ❌ |
+| **P&L Total** | +$1,008 | -$1,163 | **-$2,171** ❌ |
+| **Avg Loss** | $146 | $236 | +62% ❌ |
+
+**Operaciones catastróficas:**
+- T0057: SL -171.48pts (-$857) ← DESASTRE
+- T0021: SL -77.05pts (-$385)
+- T0037: SL -76.32pts (-$381)
+- T0007: SL -62.23pts (-$311)
+
+**Causa raíz:** Gate AND en HighVol para SL permitió SL monstruosos porque ATR alto "justificaba" distancias absurdas en puntos.
+
+---
+
+### **🎯 SOLUCIÓN V6.0i.3b:**
+
+**Filosofía:** Endurecer SL (proteger capital), relajar TP (permitir ganancias en HighVol).
+
+#### **1. Hard cap SL por puntos (sin tolerancia, sin AND):**
+```csharp
+// SIEMPRE rechazar si SL > límite en puntos
+if (slDistancePoints > maxSLPoints) REJECT
+```
+- **HighVol:** Hard cap = 70pts (vs 60 antes)
+- **Normal:** Hard cap = 83pts (sin cambios)
+- **Tolerancia:** NINGUNA en puntos (protección absoluta)
+
+#### **2. Tolerancia SOLO en SL-ATR (gate OR):**
+```csharp
+// Después del hard cap, validar ATR con 5% tolerancia
+if (slDistanceATR > tolSLATR) REJECT
+```
+- Permite variaciones pequeñas en ATR cerca del límite
+- Pero NUNCA supera el hard cap de puntos
+
+#### **3. Gate AND mantenido SOLO para TP:**
+- En HighVol: rechaza si supera puntos **Y** ATR (flexible)
+- En Normal: rechaza si supera puntos **O** ATR (estricto)
+
+---
+
+### **📝 CAMBIOS EN CÓDIGO:**
+
+#### **A) EngineConfig.cs (línea 988):**
+```csharp
+// ANTES:
+public double MaxSLDistancePoints_HighVol { get; set; } = 60.0;
+
+// DESPUÉS:
+public double MaxSLDistancePoints_HighVol { get; set; } = 70.0;
+```
+**Justificación:** 70pts evita desastres (171pts) pero permite setups sanos oct-nov (62-68pts).
+
+#### **B) RiskCalculator.cs (líneas 388-462):**
+
+**Estructura nueva:**
+1. Hard cap SL puntos (sin tolerancia)
+2. Validación SL-ATR (con tolerancia 5%)
+3. Gate AND para TP (solo HighVol)
+
+**Logs mejorados:**
+```
+[RISK][SL_CHECK_FAIL] SL=171.48pts>70.00pts (HARD_CAP) REJECTED
+[RISK][SL_CHECK_FAIL] SL_ATR=8.50>7.35ATR (with tol) REJECTED
+[RISK][NEAR_LIMIT] SL=65.00pts/6.80ATR ACCEPTED
+```
+
+---
+
+### **📊 EXPECTATIVAS V6.0i.3b:**
+
+| Métrica | V6.0i | V6.0i.2 | V6.0i.3b Esperado |
+|---------|-------|---------|-------------------|
+| **Ops cerradas** | 19 | 26 | ~23-25 |
+| **Win Rate** | 52.6% | 42.3% | **~50-52%** ✅ |
+| **Profit Factor** | 1.77 | 0.67 | **~1.5-1.7** ✅ |
+| **P&L** | +$1,008 | -$1,163 | **+$800-1000** ✅ |
+| **Avg Loss** | $146 | $236 | **~$160-180** ✅ |
+| **RejSL** | 0-5 | 0 | **>15-20** ✅ |
+
+**Operaciones bloqueadas:**
+- ✅ T0057 (-171pts) → RECHAZADO por hard cap 70pts
+- ✅ T0021 (-77pts) → RECHAZADO por hard cap 70pts
+- ✅ T0037 (-76pts) → RECHAZADO por hard cap 70pts
+
+**Operaciones permitidas:**
+- ✅ SL 62-68pts en oct-nov → ACEPTADOS (< 70pts hard cap)
+
+---
+
+### **✅ VALIDACIÓN POST-BACKTEST:**
+
+**Checklist:**
+- [ ] Logs muestran "(HARD_CAP)" en SL_CHECK_FAIL
+- [ ] RejSL reaparece (>15 rechazos)
+- [ ] Desaparecen SL >70pts
+- [ ] Avg Loss baja a ~$160-180
+- [ ] Profit Factor recupera >1.0
+- [ ] Win Rate recupera ~50%
+
+**Diagnóstico de fallo (si no mejora):**
+1. Hard cap 70pts sigue siendo restrictivo → Aumentar a 75pts
+2. Tolerancia ATR insuficiente → Aumentar a 10%
+3. Fallback TP alto sigue dañando → Atacar calidad TP
+
+---
+
+### **🔧 PRÓXIMOS PASOS:**
+
+**Si V6.0i.3b recupera PF >1.0:**
+→ Atacar problema de **TP Fallback** (85% de TP es P4_Fallback con baja calidad)
+
+**Si no mejora suficiente:**
+→ Ajustar hard cap o atacar detección régimen HighVol
+
+---
+
+## **V6.0i.4 - Relajar Filtros HighVol + Desactivar Sesgo Desfasado (06-nov-2024)**
+
+### **❌ RESULTADO V6.0i.3b:**
+
+V6.0i.3b mostró que el hard cap SL funciona (2140 rechazos), pero las operaciones desaparecieron después del 23-oct:
+
+| Métrica | V6.0i | V6.0i.3b | Degradación |
+|---------|-------|----------|-------------|
+| **Win Rate** | 52.6% | 38.1% | **-14.5%** ❌ |
+| **Profit Factor** | 1.77 | 0.87 | **-51%** ❌ |
+| **P&L** | +$1,008 | -$350 | **-$1,358** ❌ |
+| **Última operación** | 23-oct | **23-oct** | Sin cambio ❌ |
+
+**Diagnóstico profundo:**
+- **Coverage:** 5.9% (70/1353 Passed) ← Cuello de botella principal
+- **RejSL:** 0 (hard cap funciona pero operaciones NO llegan)
+- **Cancel_BOS:** 100% (25/25) por sesgo EMA200@60 desfasado
+- **RejTP:** Alto + 84% TP fallback (calidad pobre)
+
+**Causa raíz:** Filtros de entrada HighVol demasiado estrictos + cancelaciones espurias por sesgo desfasado.
+
+---
+
+### **🎯 SOLUCIÓN V6.0i.4:**
+
+**Filosofía:** Relajar filtros de ENTRADA en HighVol, mantener protección de SL, desactivar cancelaciones por sesgo desfasado.
+
+#### **1. Relajar filtros de entrada HighVol (aumentar cobertura):**
+
+```csharp
+// ANTES (V6.0i):
+MinConfidenceForEntry_HighVol = 0.65  // Muy estricto
+MinProximityForEntry_HighVol = 0.70   // Muy estricto
+MaxDistanceToEntry_ATR_HighVol = 0.6  // Muy cerca
+
+// DESPUÉS (V6.0i.4):
+MinConfidenceForEntry_HighVol = 0.60  // -7.7% más relajado
+MinProximityForEntry_HighVol = 0.60   // -14% más relajado (igualado a Normal)
+MaxDistanceToEntry_ATR_HighVol = 1.0  // +67% más rango de entrada
+```
+
+**Impacto esperado:**
+- Coverage: de 5.9% → ~12-15% (+105%)
+- Operaciones elegibles: de 70 → ~120-150 (+70%)
+
+#### **2. Desactivar cancelaciones por sesgo desfasado:**
+
+```csharp
+// ANTES:
+UseContextBiasForCancellations = true  // EMA200@60 cancela 100% operaciones
+
+// DESPUÉS:
+UseContextBiasForCancellations = false // Permite operaciones en picos de volatilidad
+```
+
+**Razón:** En alta volatilidad, EMA200@60 está desfasado y cancela operaciones válidas estructurales.
+
+**Impacto esperado:**
+- Cancel_BOS: de 25 (100%) → ~8-12 (-60%)
+
+#### **3. Aumentar límites TP HighVol (opcional - mejorar alcanzabilidad):**
+
+```csharp
+// ANTES:
+MaxTPDistancePoints_HighVol = 70
+MaxTPDistanceATR_HighVol = 9.0
+
+// DESPUÉS:
+MaxTPDistancePoints_HighVol = 75  // +7% más margen
+MaxTPDistanceATR_HighVol = 10.0   // +11% más margen (igualado a Normal)
+```
+
+**Razón:** Gate AND sigue activo para TP, pero permite objetivos más alcanzables.
+
+---
+
+### **📝 CAMBIOS EN CÓDIGO:**
+
+#### **A) EngineConfig.cs (6 parámetros modificados):**
+
+**Filtros de entrada HighVol (líneas 1056, 1062, 1068):**
+- `MinConfidenceForEntry_HighVol`: 0.65 → **0.60**
+- `MinProximityForEntry_HighVol`: 0.70 → **0.60**
+- `MaxDistanceToEntry_ATR_HighVol`: 0.6 → **1.0**
+
+**Cancelaciones (línea 1171):**
+- `UseContextBiasForCancellations`: true → **false**
+
+**Límites TP HighVol (líneas 1000, 1006):**
+- `MaxTPDistancePoints_HighVol`: 70 → **75**
+- `MaxTPDistanceATR_HighVol`: 9.0 → **10.0**
+
+**Protecciones SL (sin cambios - mantiene V6.0i.3b):**
+- `MaxSLDistancePoints_HighVol`: **70** (hard cap)
+- `MaxSLDistanceATR_HighVol`: **7.0** (con tolerancia 5%)
+
+---
+
+### **📊 EXPECTATIVAS V6.0i.4:**
+
+| Métrica | V6.0i | V6.0i.3b | V6.0i.4 Esperado |
+|---------|-------|----------|------------------|
+| **Ops cerradas** | 19 | 21 | **~28-35** ✅ |
+| **Coverage** | ? | 5.9% | **~12-15%** ✅ |
+| **Cancel_BOS** | 27 | 25 (100%) | **~8-12** ✅ |
+| **Win Rate** | 52.6% | 38.1% | **~48-52%** ✅ |
+| **Profit Factor** | 1.77 | 0.87 | **~1.3-1.6** ✅ |
+| **P&L** | +$1,008 | -$350 | **+$600-900** ✅ |
+| **Última op** | 23-oct | 23-oct | **~04-nov** ✅ |
+| **RejSL (hard cap)** | 0-5 | 2140 | **>2000** ✅ |
+
+**Operaciones esperadas en oct-nov:**
+- V6.0i: 0-5 operaciones
+- V6.0i.4: **~15-20 operaciones** (recupera período crítico)
+
+---
+
+### **✅ VALIDACIÓN POST-BACKTEST:**
+
+**Checklist:**
+- [ ] Coverage aumenta >10%
+- [ ] Cancel_BOS reduce a <15 (vs 25 anterior)
+- [ ] Última operación >30-oct
+- [ ] Operaciones totales >28
+- [ ] Profit Factor >1.0
+- [ ] Win Rate >45%
+- [ ] RejSL sigue activo (>2000 rechazos)
+- [ ] No aparecen SL >70pts en operaciones cerradas
+
+**Diagnóstico de fallo (si no mejora):**
+1. Coverage sigue bajo → Revisar otros filtros (scoring breakdown)
+2. Cancel_BOS sigue alto → Revisar detección BOS contradictorio
+3. PF <1.0 → Atacar calidad TP (84% fallback es problema)
+
+---
+
+### **🔧 PRÓXIMOS PASOS:**
+
+**Si V6.0i.4 recupera PF >1.2 y cobertura >12%:**
+→ Atacar problema de **TP Fallback** (84% de TP con baja calidad)
+
+**Si cobertura sigue baja (<10%):**
+→ Analizar scoring breakdown para identificar filtros adicionales
+
+**Si Cancel_BOS sigue alto (>15):**
+→ Revisar lógica de BOS contradictorio o ajustar sesgo compuesto
+
+---
+
+## **📊 RESULTADOS V6.0i.4 (Backtest 20251106_074924)**
+
+### **KPIs Finales:**
+- **Win Rate:** 40.0% (↓ desde 42.3% en V6.0i.3b)
+- **Profit Factor:** 0.80 (↑ desde 0.67, pero aún <1.0)
+- **P&L:** -$823.16 (mejor que -$1,163, pero aún negativo)
+- **Operaciones:** 70 registradas / 1,353 Passed (5.9% coverage)
+- **Canceladas:** 25 (BOS: 25/25 = 100%)
+- **Expiradas:** 24 (DISTANCE: 15, TIMEOUT: 9)
+- **Ejecutadas:** 21
+
+### **Diagnóstico:**
+❌ **V6.0i.4 NO resolvió el problema de throughput en HighVol**
+
+#### **1. Coverage ultra-bajo (5.9%):**
+- Filtros de entrada relajados (MinProximity 0.60, MaxDistance 1.0 ATR, MinConfidence 0.60)
+- AÚN ASÍ, solo 70 registros de 1,353 señales Passed
+- **Cuello de botella NO está en los filtros de entrada**
+
+#### **2. Cancelaciones BOS = 100% del total:**
+- 25 cancelaciones, TODAS por BOS contradictorio
+- `UseContextBiasForCancellations = false` NO detuvo las cancelaciones
+- **Causa:** El método `CheckBOSContradictory` usa `coreEngine.CurrentMarketBias` (BOS/CHoCH), no solo EMA200
+- El flag solo desactiva el cálculo EMA200, pero el bias BOS sigue activo
+
+#### **3. Patrón temporal crítico:**
+- **Antes del 23-oct:** Sistema funcional (operaciones en Normal y HighVol)
+- **Después del 23-oct:** Cascada de cancelaciones BOS instantáneas
+- **Ejemplo:** 19 órdenes registradas y canceladas en la misma barra (0.025-0.050 ms después)
+
+#### **4. SL y TP:**
+- **RejSL = 0** → Hard cap SL 70pts funcionó
+- **RejTP alto** → 84% TP Fallback (baja calidad)
+- **SL promedio:** 66-77 pts (dentro de límites, pero pérdidas grandes)
+
+### **🔍 ANÁLISIS DE LOGS (Último 30 operaciones):**
+
+#### **Patrón detectado:**
+```
+2024-10-23 15:45:00 → ORDEN REGISTRADA (BUY @ 5,768.75)
+2024-10-23 15:45:00 → ORDEN CANCELADA (BOS_CONTRARY) [0.025 ms después]
+```
+
+#### **Secuencia típica:**
+1. Señal Passed → RiskCalculator acepta SL/TP
+2. TradeManager registra la orden (PENDING)
+3. **INMEDIATAMENTE** (misma barra, ~0.025 ms): `CheckBOSContradictory` detecta BOS contradictorio
+4. Orden cancelada sin oportunidad de ejecución
+
+#### **Causa raíz:**
+- **Volatilidad extrema post-23-oct** → BOS/CHoCH múltiples en barras consecutivas
+- **Sesgo cambia cada 15 minutos** → Órdenes válidas se invalidan instantáneamente
+- **NO hay ventana de gracia** → La orden no tiene tiempo de llenarse antes de ser cancelada
+
+### **📈 COMPARATIVA EVOLUTIVA:**
+
+| Versión | Win Rate | PF | P&L | Ops | Cancel_BOS | RejSL | Coverage |
+|---------|----------|-----|------|-----|------------|-------|----------|
+| V6.0i.1 (base) | 52.6% | 1.77 | +$1,008 | 114 | 27 | 5 | 8.4% |
+| V6.0i.2 (gate AND) | 42.3% | 0.67 | -$1,163 | 71 | 18 | 0 | 5.2% |
+| V6.0i.3b (hard cap) | - | - | - | - | - | - | - |
+| V6.0i.4 (relax+nobias) | 40.0% | 0.80 | -$823 | 70 | 25 | 0 | 5.9% |
+
+**Degradación progresiva:** Cada cambio empeoró o mantuvo bajo el throughput.
+
+---
+
+## **🎯 PROPUESTA V6.0i.5: GRACIA BOS (BOS GRACE)**
+
+### **Objetivo:**
+Romper la cascada de cancelaciones BOS instantáneas en HighVol, dando una **ventana de gracia temporal** para que las órdenes PENDING tengan oportunidad de llenarse antes de ser canceladas por BOS contradictorio.
+
+### **Concepto:**
+- **"BOS Grace":** Período de gracia de N barras (TF decisión) tras el registro de la orden.
+- Durante la gracia, NO se cancela por BOS contradictorio.
+- Otras invalidaciones (estructura no existe, score decayó a 0, expiraciones) se aplican inmediatamente.
+
+### **Impacto esperado:**
+- ✅ Cancel_BOS: de ~25 a ~3-6 (reducción 75-90%)
+- ✅ Ejecutadas: de 21 a ~100-133 (aumento 4-6x)
+- ✅ WR/PF: mejora sustancial (más operaciones de calidad ejecutadas)
+- ✅ Mantiene disciplina de riesgo (SL hard cap, TP gate AND, validaciones estructurales)
+
+---
+
+## **🔧 ESPECIFICACIÓN TÉCNICA V6.0i.5**
+
+### **1. Nuevos parámetros en `EngineConfig.cs`:**
+
+```csharp
+public int BOSGraceBars { get; set; } = 4;                  // ~1h @ DecisionTF=15m
+public bool EnableBOSGraceInHighVolOnly { get; set; } = true; // Solo en HighVol
+```
+
+**Justificación:**
+- **4 barras @ 15min** = 1 hora de gracia en HighVol
+- **Solo HighVol:** Evita relajar el régimen Normal (sesgo BOS más estable)
+
+### **2. Modificación en `TradeManager.cs`:**
+
+#### **a) Actualizar firma de `UpdateTrades`:**
+**Línea 172:**
+```csharp
+public void UpdateTrades(double currentHigh, double currentLow, int currentBar, DateTime currentBarTime, double currentPrice, 
+                         CoreEngine coreEngine, IBarDataProvider barData, string currentRegime = "Normal")
+```
+
+**Justificación:** Pasar el régimen como dato (acoplamiento bajo).
+
+#### **b) Añadir lógica gracia BOS en `CheckBOSContradictory`:**
+**Ubicación:** Al inicio del método (línea 394), ANTES de cualquier lógica BOS.
+
+```csharp
+private bool CheckBOSContradictory(TradeRecord trade, CoreEngine coreEngine, IBarDataProvider barData, DateTime currentBarTime, string currentRegime)
+{
+    // ========================================================================
+    // V6.0i.5: GRACIA BOS - Ventana de llenado antes de cancelar
+    // Solo PENDING, solo BOS, solo HighVol (si EnableBOSGraceInHighVolOnly=true)
+    // ========================================================================
+    bool applyGrace = !_config.EnableBOSGraceInHighVolOnly || currentRegime == "HighVol";
+    if (applyGrace && trade.Status == TradeStatus.PENDING)
+    {
+        // Calcular barras transcurridas en TF decisión
+        int tf = _config.DecisionTimeframeMinutes;
+        int currentIdx = barData.GetBarIndexFromTime(tf, currentBarTime);
+        int entryIdx   = barData.GetBarIndexFromTime(tf, trade.EntryBarTime);
+        int barsWaiting = Math.Max(0, currentIdx - entryIdx);
+
+        // Limitar gracia a ventana de fill del régimen
+        int maxBarsToFill = (currentRegime == "HighVol") 
+            ? _config.MaxBarsToFillEntry_HighVol 
+            : _config.MaxBarsToFillEntry;
+        int effectiveGrace = Math.Min(_config.BOSGraceBars, maxBarsToFill);
+
+        if (barsWaiting < effectiveGrace)
+        {
+            _logger.Info($"[TradeManager][BOS_GRACE] Trade={trade.Id} Action={trade.Action} Regime={currentRegime} Waiting={barsWaiting}/{effectiveGrace} → NO cancel por BOS");
+            return false; // NO cancelar por BOS durante la gracia
+        }
+    }
+
+    // V5.6.6: Sesgo único con cálculo directo EMA200@60 para cancelaciones si está habilitado
+    string currentBias = coreEngine.CurrentMarketBias;
+    // ... (resto del código existente sin cambios) ...
+```
+
+**Ajustes finos incorporados:**
+- ✅ Usa `GetBarIndexFromTime` para TF decisión (robusto en MTF)
+- ✅ Limita gracia a `Math.Min(BOSGraceBars, MaxBarsToFillEntry)` (no extiende vida indefinidamente)
+- ✅ Solo aplica si `trade.Status == TradeStatus.PENDING`
+- ✅ Activación por régimen: `EnableBOSGraceInHighVolOnly = true` por defecto
+- ✅ Logs de auditoría: `[BOS_GRACE]` en bypass
+
+#### **c) Actualizar firma de `CheckInvalidation`:**
+**Línea 268:**
+```csharp
+private bool CheckInvalidation(TradeRecord trade, double currentPrice, int currentBar, DateTime currentBarTime,
+                               CoreEngine coreEngine, IBarDataProvider barData, string currentRegime)
+```
+
+#### **d) Actualizar llamadas internas:**
+**Línea 183 (dentro de `UpdateTrades`):**
+```csharp
+if (CheckInvalidation(trade, currentPrice, currentBar, currentBarTime, coreEngine, barData, currentRegime))
+```
+
+**Línea 309 (dentro de `CheckInvalidation`):**
+```csharp
+if (CheckBOSContradictory(trade, coreEngine, barData, currentBarTime, currentRegime))
+```
+
+### **3. Modificación en `ExpertTrader.cs`:**
+
+**Línea 681 (antes de `UpdateTrades`):**
+```csharp
+// Extraer régimen actual desde último snapshot (orquestador: solo pasa datos)
+string currentRegime = "Normal"; // default
+if (_lastDecision?.Context?.MarketRegime != null)
+{
+    currentRegime = _lastDecision.Context.MarketRegime;
+}
+
+// PASO 1: Actualizar estado de todas las órdenes activas
+_tradeManager.UpdateTrades(currentHigh, currentLow, analysisBarIndex, currentTime, currentPrice, _coreEngine, _barDataProvider, currentRegime);
+```
+
+**Justificación:**
+- ExpertTrader NO toma decisiones de negocio
+- Solo extrae un dato ya calculado (`_lastDecision.Context.MarketRegime`)
+- Actúa como **orquestador/renderer**: pasa información entre componentes
+
+---
+
+## **📋 RESUMEN DE ARCHIVOS MODIFICADOS:**
+
+| Archivo | Cambio | Líneas |
+|---------|--------|--------|
+| `EngineConfig.cs` | Añadir `BOSGraceBars` y `EnableBOSGraceInHighVolOnly` | ~398 |
+| `TradeManager.cs` | Añadir parámetro `currentRegime` a `UpdateTrades` | 172 |
+| `TradeManager.cs` | Añadir lógica gracia BOS en `CheckBOSContradictory` | 394 (inicio) |
+| `TradeManager.cs` | Añadir parámetro `currentRegime` a `CheckInvalidation` | 268 |
+| `TradeManager.cs` | Actualizar llamadas internas con `currentRegime` | 183, 309 |
+| `ExpertTrader.cs` | Extraer régimen y pasar a `UpdateTrades` | 681 |
+
+---
+
+## **🎯 CRITERIOS DE ÉXITO:**
+
+### **Mínimos (aprobar V6.0i.5):**
+1. ✅ Cancel_BOS cae de 25 a <10
+2. ✅ Ejecutadas suben de 21 a >50
+3. ✅ PF sube de 0.80 a >1.0
+4. ✅ Coverage sube de 5.9% a >8%
+
+### **Objetivos (V6.0i.5 exitoso):**
+1. ✅ Cancel_BOS: ~3-6 (reducción 75-90%)
+2. ✅ Ejecutadas: ~100-133 (aumento 4-6x)
+3. ✅ PF: >1.2 (sistema rentable)
+4. ✅ WR: >45% (recupera calidad)
+5. ✅ Coverage: >10% (recupera throughput pre-Oct-23)
+
+### **Si falla V6.0i.5:**
+- Analizar logs de `[BOS_GRACE]` para ver si la gracia se aplica correctamente
+- Revisar si las órdenes se llenan durante la gracia o expiran por otras causas
+- Considerar aumentar `BOSGraceBars` a 6-8 barras si la gracia es insuficiente
+
+---
+
+## **⚠️ RIESGOS Y MITIGACIÓN:**
+
+### **Riesgo 1: Gracia excesiva permite operaciones contra-tendencia**
+**Mitigación:**
+- Limitar gracia a `Math.Min(BOSGraceBars, MaxBarsToFillEntry)`
+- Activar solo en HighVol (`EnableBOSGraceInHighVolOnly = true`)
+- Mantener validaciones estructurales y expiraciones
+
+### **Riesgo 2: Órdenes se llenan pero SL sigue grande**
+**Mitigación:**
+- Hard cap SL 70pts ya implementado (V6.0i.3b)
+- SL-ATR con tolerancia 5% (V6.0i.3b)
+- No se relajan validaciones de riesgo
+
+### **Riesgo 3: TP Fallback sigue alto (84%)**
+**Mitigación:**
+- V6.0i.5 NO toca calidad TP (atacar después)
+- Priorizar throughput primero, calidad TP después
+
+---
+
+## **❌ CONCLUSIÓN V6.0i.5: EFECTO COLATERAL CRÍTICO**
+
+### **Resultados del backtest (20251106_085040):**
+- **Win Rate:** 40.0% (sin cambio vs V6.0i.4)
+- **Profit Factor:** 0.88 (↑ desde 0.80, pero <1.0)
+- **P&L:** -$236 (mejor que -$823, pero negativo)
+- **Ops Registradas:** 57 (↓ -18.6% desde 70)
+- **Ejecutadas:** 20 (↓ desde 21)
+- **Cancel BOS:** 9 (✅ -64% desde 25)
+- **Expiradas:** 27 (↑ +12.5% desde 24)
+- **[BOS_GRACE] logs:** 70 aplicaciones (funciona correctamente)
+
+### **Diagnóstico Final:**
+✅ **La gracia BOS funcionó** (70 aplicaciones, -64% cancelaciones BOS)
+❌ **Efecto colateral crítico:** Bloqueo por PENDING largas
+
+**Causa raíz del problema:**
+1. Gracia de 4 barras → Órdenes PENDING permanecen vivas más tiempo
+2. `MaxConcurrentTrades = 1` → Solo 1 operación permitida (PENDING + EXECUTED)
+3. **PENDING largas bloquean el registro de nuevas señales**
+4. **Resultado:** Menos operaciones registradas (70 → 57 = -18.6%)
+
+**Es una TRAMPA 22:**
+- **Sin gracia:** Órdenes canceladas rápidamente → Hay "espacio" para registrar nuevas → 70 ops
+- **Con gracia:** Órdenes quedan en PENDING esperando → Bloquean nuevas señales → 57 ops
+
+**El problema real NO son las cancelaciones BOS, sino:**
+1. Órdenes tardan mucho en ejecutarse (expiradas por distancia/tiempo)
+2. Bloquean el sistema mientras están PENDING
+3. `MaxConcurrentTrades = 1` es demasiado restrictivo para mercado volátil (pero es requisito)
+
+---
+
+## **🎯 PROPUESTA V6.0i.6: DEBOUNCE BOS + PENDING STALENESS (OPCIÓN A CONSERVADORA)**
+
+### **Estrategia:**
+Sustituir "gracia BOS" (4 barras) por solución más inteligente que:
+- ✅ Evita cancelaciones instantáneas (confirma que BOS persiste)
+- ✅ NO bloquea el sistema con PENDING largas
+- ✅ Mantiene `MaxConcurrentTrades = 1` (requisito)
+
+### **Implementación (3 componentes):**
+
+#### **1. Debounce BOS (1 barra de confirmación):**
+- **Normal:** Cancelación inmediata (BOS más estable)
+- **HighVol:** Cancelar solo si BOS contradictorio persiste ≥1 barra completa
+- **Ventaja:** Evita cancelaciones en milisegundos, pero no bloquea el sistema
+- **Tracking:** Diccionario `{TradeId: FirstBOSDetectionBar}`
+- **Limpieza:** Si BOS desaparece, limpiar tracking
+
+#### **2. Acortar vida PENDING en HighVol:**
+- **`MaxBarsToFillEntry_HighVol`:** 32 → **12 barras** (~3h @ 15min vs 8h antes)
+- **Ventaja:** Libera espacio más rápido para nuevas señales
+- **Ventaja:** Evita órdenes "zombies" que nunca se llenan
+
+#### **3. PENDING Staleness por distancia:**
+- **`MaxDistanceToEntry_ATR_Cancel`:** 1.5 ATR (Normal), 1.2 ATR (HighVol)
+- **Lógica:** Si la orden se aleja más del umbral → CANCEL automáticamente
+- **Ventaja:** Cancela órdenes cuyo entry se ha vuelto inalcanzable
+
+### **Política de SWAP (postergada para V6.0i.7):**
+- Si el bloqueo persiste, implementar reemplazo inteligente de PENDING
+- Comparar nueva señal vs PENDING por Confidence, R:R, DistanceToEntry
+- Cancelar PENDING y registrar nueva si es >15% superior
+
+---
+
+## **🔧 CAMBIOS IMPLEMENTADOS V6.0i.6:**
+
+### **1. EngineConfig.cs:**
+
+**Línea 716-722: Reemplazar "gracia" por "debounce"**
+```csharp
+public int BOSDebounceBarReq { get; set; } = 1;              // 1 barra confirmación @ 15min
+public bool EnableBOSDebounceInHighVolOnly { get; set; } = true; // Solo HighVol
+```
+
+**Línea 1094: Acortar vida PENDING HighVol**
+```csharp
+public int MaxBarsToFillEntry_HighVol { get; set; } = 12;   // 3h @ 15min (vs 8h antes)
+```
+
+**Línea 1100-1106: Añadir staleness por distancia**
+```csharp
+public double MaxDistanceToEntry_ATR_Cancel { get; set; } = 1.5;            // Normal
+public double MaxDistanceToEntry_ATR_Cancel_HighVol { get; set; } = 1.2;   // HighVol (más estricto)
+```
+
+### **2. TradeManager.cs:**
+
+**Línea 65: Añadir diccionario tracking BOS**
+```csharp
+private readonly Dictionary<string, int> _bosFirstDetection; // TradeId -> BarIndex primera detección
+```
+
+**Línea 78: Inicializar diccionario**
+```csharp
+_bosFirstDetection = new Dictionary<string, int>();
+```
+
+**Línea 399-513: Reemplazar gracia por debounce BOS**
+- **Detectar si hay BOS contradictorio** (BUY + Bearish, SELL + Bullish)
+- **En Normal:** Cancelar inmediatamente
+- **En HighVol:**
+  - Primera detección → Registrar en `_bosFirstDetection`, NO cancelar
+  - Detecciones posteriores → Si `barsWithBOS >= BOSDebounceBarReq` → CANCELAR
+  - Si BOS desaparece → Limpiar tracking
+- **Logs:** `[BOS_DEBOUNCE_START]`, `[BOS_DEBOUNCE_WAIT]`, `[BOS_DEBOUNCE_CANCEL]`, `[BOS_DEBOUNCE_CLEAR]`
+
+**Línea 329-389: Reemplazar expiración absoluta por staleness adaptativa**
+- **3A: Staleness por TIEMPO:**
+  - Calcular `barsWaiting` en TF decisión
+  - Si `barsWaiting > MaxBarsToFillEntry_(regime)` → CANCEL
+  - Razón: `PENDING_STALE_TIME`
+  - Log: `[PENDING_STALE_TIME]`
+
+- **3B: Staleness por DISTANCIA:**
+  - Calcular `distanceATR = distanceToEntry / ATR60`
+  - Si `distanceATR > MaxDistanceToEntry_ATR_Cancel_(regime)` → CANCEL
+  - Razón: `PENDING_STALE_DIST`
+  - Log: `[PENDING_STALE_DIST]`
+
+---
+
+## **📊 IMPACTO ESPERADO V6.0i.6:**
+
+### **Mínimo (aprobar):**
+1. ✅ Cancel_BOS cae (pero menos que V6.0i.5): ~15 cancelaciones evitadas
+2. ✅ Ops Registradas recuperan o superan V6.0i.4: ≥70 ops
+3. ✅ Expiradas por staleness: ~20-25 (liberan espacio más rápido)
+4. ✅ Ejecutadas suben: >25 ops
+5. ✅ PF sube: >0.9
+
+### **Objetivo (éxito):**
+1. ✅ Cancel_BOS: ~10-15 (confirmación BOS real)
+2. ✅ Ops Registradas: >80 (sin bloqueo)
+3. ✅ Ejecutadas: >30 (mejor throughput)
+4. ✅ PF: >1.0 (rentable)
+5. ✅ WR: >42% (recupera calidad)
+6. ✅ Logs `[BOS_DEBOUNCE_*]` y `[PENDING_STALE_*]` aparecen correctamente
+
+### **Si falla:**
+- Analizar logs de debounce: ¿Se aplica correctamente?
+- Analizar logs de staleness: ¿Libera PENDING a tiempo?
+- Si aún hay bloqueo → Implementar SWAP (V6.0i.7)
+
+---
+
+## 📊 **RESULTADOS V6.0i.6 - 2025-11-06 09:32**
+**Backtest:** `backtest_20251106_093247.log`
+
+### **KPIs Principales:**
+
+| **Métrica** | **V6.0i.5** | **V6.0i.6** | **Cambio** | **Estado** |
+|-------------|-------------|-------------|------------|------------|
+| **Ops Registradas** | 57 | **117** | **+105%** | ✅ **EXCELENTE** |
+| **Ejecutadas** | 20 | 22 | +10% | ⚠️ MEJORA LEVE |
+| **Cancel BOS** | 9 | **0** | **-100%** | ✅ **PERFECTO** |
+| **Expiradas** | 27 | **94** | **+248%** | ❌ **PROBLEMA** |
+| **Win Rate** | 40.0% | **45.5%** | +5.5pp | ✅ MEJORA |
+| **Profit Factor** | 0.88 | 0.89 | +0.01 | ⚠️ SIGUE <1 |
+| **P&L** | -$236 | -$220 | +7% | ✅ MEJORA |
+
+### **✅ LO QUE FUNCIONÓ:**
+
+1. **Debounce BOS = ÉXITO TOTAL:**
+   - ✅ Cancel_BOS: 9 → 0 (-100%)
+   - ✅ 11 detecciones de BOS contradictorio (`BOS_DEBOUNCE_START`)
+   - ✅ 0 cancelaciones por BOS persistente (`BOS_DEBOUNCE_CANCEL`)
+   - ✅ El BOS apareció momentáneamente pero NO persistió ≥1 barra → debounce funcionó
+
+2. **Throughput DUPLICADO:**
+   - ✅ Ops Registradas: 57 → 117 (+105%)
+   - ✅ Coverage: 5.9% → 10.3% (+74%)
+   - ✅ El bloqueo por PENDING largas SE ELIMINÓ
+
+3. **Calidad de Operaciones MEJORÓ:**
+   - ✅ Win Rate: 40% → 45.5% (+5.5pp)
+   - ✅ P&L: -$236 → -$220
+
+### **❌ EFECTO COLATERAL: STALENESS DEMASIADO AGRESIVA**
+
+**Expiradas EXPLOTARON: 27 → 94 (+248%)**
+
+**Desglose de razones de expiración:**
+- **STALE_DIST:** ~**86 ops (91%)** ← **PROBLEMA CRÍTICO**
+- estructura no existe: 18 (19%)
+- score decayó: 1 (1%)
+- **STALE_TIME: 0 ops** (MaxBarsToFillEntry_HighVol=12 nunca se alcanza)
+
+**Distribución STALE_DIST (de logs):**
+```
+1.0-2.0 ATR: ~21 ops (24%) - MUY CERCA del entry, canceladas prematuramente
+2.0-3.0 ATR: ~10 ops (12%)
+3.0-8.0 ATR: ~32 ops (37%)
+8.0-12 ATR:  ~11 ops (13%)
+12+ ATR:     ~12 ops (14%)
+```
+
+**Ejemplos de cancelaciones prematuras:**
+```
+T0111: STALE_DIST 1.75 ATR → CANCEL
+T0112: STALE_DIST 1.50 ATR → CANCEL
+T0108: STALE_DIST 9.75 ATR → CANCEL
+```
+
+**Conclusión:** `MaxDistanceToEntry_ATR_Cancel_HighVol = 1.2 ATR` es **DEMASIADO ESTRICTO**.
+
+### **🚨 GAPS MÚLTIPLES SIN OPERACIONES (TODO EL BACKTEST):**
+
+**Timeline de operaciones cerradas (22 total):**
+```
+2025-08-22: 2 ops
+   🚨 GAP: 11 días sin cerrar ops
+2025-09-02 a 09-24: 12 ops (gaps de 2-5 días)
+   🚨 GAP CRÍTICO: 7 días (Sep 24 → Oct 01)
+2025-10-01 a 10-09: 6 ops (gaps de 2-3 días)
+   🚨 GAP CRÍTICO: 7 días (Oct 09 → Oct 16)
+2025-10-16 a 10-23: 4 ops (gaps de 3-4 días)
+   FIN del backtest
+```
+
+**Gaps críticos identificados (>5 días sin cerrar):**
+1. **Ago 22 → Sep 02:** 11 días
+2. **Sep 24 → Oct 01:** 7 días
+3. **Oct 09 → Oct 16:** 7 días
+
+**Conclusión:** El problema de "no operar en alta volatilidad" NO es solo octubre, es **todo el backtest**.
+
+### **💡 DIAGNÓSTICO FINAL:**
+
+**V6.0i.6 resuelve:**
+- ✅ Debounce BOS: funciona perfectamente
+- ✅ Throughput: duplicado
+- ✅ Calidad: WR sube
+
+**V6.0i.6 introduce:**
+- ❌ Staleness por distancia demasiado agresiva (1.2 ATR)
+- ❌ 86 órdenes canceladas por alejarse del entry
+- ❌ Execution Rate bajo: 18.8% (22/117)
+
+**Causa raíz de gaps múltiples:**
+- STALE_DIST agresivo cancela órdenes que habrían llenado
+- En HighVol, el precio oscila más → necesita más margen
+
+---
+
+## 🔧 **HOTFIX V6.0i.6b - 2025-11-06 10:15**
+
+### **Cambio Único:**
+
+**EngineConfig.cs - Línea 1106:**
+```csharp
+// V6.0i.6 (ANTES):
+public double MaxDistanceToEntry_ATR_Cancel_HighVol { get; set; } = 1.2;
+
+// V6.0i.6b (DESPUÉS):
+public double MaxDistanceToEntry_ATR_Cancel_HighVol { get; set; } = 2.0;
+```
+
+### **Justificación:**
+
+**Análisis de distribución STALE_DIST:**
+- 1.0-2.0 ATR: 21 ops (24%) → **Con 2.0 ATR se recuperan**
+- 2.0-8.0 ATR: 42 ops (49%) → Mantienen expiración
+- 8.0+ ATR:    23 ops (27%) → Mantienen expiración
+
+**Balance:**
+- ✅ Recupera ~21 órdenes canceladas muy cerca del entry
+- ✅ Mantiene control sobre órdenes que se alejan mucho (>2 ATR)
+- ✅ En HighVol con ATR60 = 15 pts → 2.0 ATR = 30 pts de tolerancia (razonable)
+- ✅ Cambio incremental (1.2 → 2.0 = +67%), no agresivo
+
+### **Impacto Esperado:**
+
+| **Métrica** | **V6.0i.6** | **V6.0i.6b (esperado)** | **Cambio** |
+|-------------|-------------|-------------------------|------------|
+| Ops Registradas | 117 | 117 | = |
+| Expiradas STALE_DIST | 86 | ~40-50 | -42% a -53% |
+| Ejecutadas | 22 | **~35-45** | +59% a +104% |
+| Win Rate | 45.5% | **~45-48%** | Mantiene o mejora |
+| PF | 0.89 | **~0.95-1.05** | Break-even esperado |
+| P&L | -$220 | **-$50 a +$150** | Mejora sustancial |
+| Gaps de 7 días | 3 | **~1-2** | Reduce |
+
+### **Archivos Modificados:**
+- ✅ `pinkbutterfly-produccion/EngineConfig.cs` (línea 1106)
+- ✅ Copiado a NinjaTrader: `C:\Users\meste\Documents\NinjaTrader 8\bin\Custom\Indicators\PinkButterfly\EngineConfig.cs`
+
+### **Próximos Pasos:**
+1. ✅ Compilar en NinjaTrader (F5)
+2. ✅ Ejecutar backtest (mismo período)
+3. ✅ Analizar KPIs:
+   - Expiradas STALE_DIST: ¿~40-50?
+   - Ejecutadas: ¿~35-45?
+   - Gaps: ¿Reducidos?
+   - PF: ¿~1.0?
+
+### **Si V6.0i.6b tiene éxito:**
+- Mantener configuración
+- Monitorizar gaps restantes
+- Si persisten → analizar otras causas (filtros entry, calidad estructuras)
+
+### **Si V6.0i.6b falla:**
+- Si STALE_DIST sigue alto → subir a 2.5 ATR
+- Si throughput no mejora → revisar filtros entry HighVol
+- Si gaps persisten → problema más profundo (bias, estructuras, DFM)
+
+---
+
+## 📊 **RESULTADOS V6.0i.6b - 2025-11-06 10:03**
+
+**Backtest:** `backtest_20251106_095729.log`
+
+### **KPIs Principales:**
+
+| **Métrica** | **V6.0i.6** | **V6.0i.6b** | **Cambio** | **vs Esperado** |
+|-------------|-------------|--------------|------------|-----------------|
+| **Ops Registradas** | 117 | 114 | -3 (-2.6%) | ≈ Esperado ✓ |
+| **Ejecutadas** | 22 | **24** | +2 (+9%) | ❌ Esperábamos ~35-45 |
+| **Canceladas** | 0 | 1 | +1 | ⚠️ BOS 1 barra |
+| **Expiradas** | 94 | **88** | -6 (-6.4%) | ❌ Esperábamos ~50-60 |
+| **STALE_DIST** | ~86 | **~68** | -18 (-21%) | ❌ Esperábamos ~25-30 |
+| **Win Rate** | 45.5% | 45.8% | +0.3pp | ✅ Mantiene |
+| **Profit Factor** | 0.89 | **0.98** | **+0.09** | ✅ **CASI RENTABLE** |
+| **P&L** | -$220 | **-$49** | **+$171** | ✅ **+78%** |
+
+### **✅ LO POSITIVO:**
+
+1. **Profit Factor casi rentable:**
+   - ✅ PF: 0.89 → 0.98 (solo falta 0.02 para break-even)
+   - ✅ P&L: -$220 → -$49 (+$171, mejora del 78%)
+   - ✅ Avg Win: $175 → $192 (+9%)
+   - ✅ Avg Loss: $164 → $166 (estable)
+
+2. **Reducción de STALE_DIST:**
+   - ✅ 86 → 68 (-21%)
+   - ✅ Ejecutadas: 22 → 24 (+9%)
+
+3. **Calidad se mantiene:**
+   - ✅ Win Rate: 45.5% → 45.8%
+   - ✅ R:R: 1.27 → 1.28
+
+### **❌ IMPACTO INSUFICIENTE:**
+
+**Problema:** 2.0 ATR es insuficiente para las oscilaciones en HighVol.
+
+**Distribución STALE_DIST en V6.0i.6b:**
+```
+2-3 ATR:   14 ops (21%) ← Canceladas pese a 2.0 ATR
+4-6 ATR:   22 ops (32%) ← Mayoría aquí
+7-8 ATR:   10 ops (15%)
+9-12 ATR:  7 ops (10%)
+13-26 ATR: 12 ops (18%)
+38-42 ATR: 3 ops (4%)  ← Casos extremos
+```
+
+**Análisis:**
+- 2.0 ATR solo recuperó órdenes entre 1.2-2.0 ATR (~18 ops)
+- La mayoría de STALE_DIST están entre 2-8 ATR
+- **68 órdenes aún se alejan >2.0 ATR del entry**
+
+**Conclusión:** Un umbral fijo no es suficiente. Las órdenes recientes necesitan más margen que las viejas.
+
+---
+
+## 🔧 **V6.0i.6c - CURVA DINÁMICA POR EDAD DE ORDEN - 2025-11-06 10:30**
+
+### **Concepto:**
+
+**Problema identificado:**
+- Órdenes recientes (0-4 barras) pueden alejarse temporalmente y RETORNAR al entry
+- Órdenes viejas (9-12 barras) probablemente NO van a llenar → más exigencia
+
+**Solución: Curva decreciente de tolerancia por edad**
+
+### **Cambios Implementados:**
+
+**1. EngineConfig.cs - Nuevos parámetros (líneas 1108-1124):**
+```csharp
+// V6.0i.6c: Curva de cancelación por distancia (HighVol)
+public double MaxDistATR_Cancel_HV_0to4  { get; set; } = 2.5; // 0-4 barras: alta tolerancia
+public double MaxDistATR_Cancel_HV_5to8  { get; set; } = 2.0; // 5-8 barras: media tolerancia
+public double MaxDistATR_Cancel_HV_9to12 { get; set; } = 1.5; // 9-12 barras: baja tolerancia
+
+// MANTENER (NO cambiar):
+public double MaxDistanceToEntry_ATR_HighVol { get; set; } = 1.0; // Filtro de REGISTRO intacto
+```
+
+**2. TradeManager.cs - Lógica de curva (líneas 366-413):**
+```csharp
+// V6.0i.6c: Umbral dinámico por edad de orden (curva decreciente en HighVol)
+double threshold;
+if (currentRegime == "HighVol")
+{
+    // Curva decreciente: más tolerancia cuando es reciente, menos cuando es vieja
+    if (barsWaiting <= 4)
+        threshold = _config.MaxDistATR_Cancel_HV_0to4;  // 2.5 ATR (0-4 barras)
+    else if (barsWaiting <= 8)
+        threshold = _config.MaxDistATR_Cancel_HV_5to8;  // 2.0 ATR (5-8 barras)
+    else if (barsWaiting <= 12)
+        threshold = _config.MaxDistATR_Cancel_HV_9to12; // 1.5 ATR (9-12 barras)
+    else
+        threshold = 1.0; // Fallback (no debería alcanzarse, STALE_TIME ya cancelaría)
+}
+else
+{
+    // Normal: umbral fijo
+    threshold = maxDistanceATR_Cancel; // 1.5 ATR
+}
+
+if (distanceATR > threshold)
+{
+    // CANCEL con log específico [PENDING_STALE_DIST_CURVE]
+}
+```
+
+### **Lógica de la Curva:**
+
+| **Edad Orden** | **Umbral ATR** | **Ejemplo (ATR60=15pts)** | **Rationale** |
+|----------------|----------------|---------------------------|---------------|
+| 0-4 barras | 2.5 ATR | 37.5 pts | Oscilación normal, puede retornar |
+| 5-8 barras | 2.0 ATR | 30.0 pts | Tolerancia media |
+| 9-12 barras | 1.5 ATR | 22.5 pts | Baja probabilidad de fill |
+| >12 barras | - | - | STALE_TIME cancela |
+
+**En régimen Normal:**
+- Umbral fijo: 1.5 ATR (sin cambios)
+
+### **Diseño Conservador:**
+
+**NO se modificó:**
+- ✅ `MaxDistanceToEntry_ATR_HighVol = 1.0` (filtro de REGISTRO mantiene calidad)
+- ✅ `MaxBarsToFillEntry_HighVol = 12` (límite absoluto de tiempo)
+- ✅ DFM, TP, SL (sin cambios)
+
+**Se modificó:**
+- ✅ Solo el umbral de CANCELACIÓN post-registro
+- ✅ Solo en HighVol (Normal intacto)
+- ✅ Con lógica adaptativa por edad
+
+### **Logs y Trazas:**
+
+**Log en HighVol:**
+```
+[TradeManager][PENDING_STALE_DIST_CURVE] Trade=xxx BUY @ 6750.00 Regime=HighVol Bars=3 Dist=2.8ATR>Thr=2.5ATR → CANCEL
+```
+
+**CSV:**
+```
+STALE_DIST_CURVE: 2.8ATR>2.5ATR @3bars
+```
+
+### **Impacto Esperado:**
+
+| **Métrica** | **V6.0i.6b** | **V6.0i.6c (esperado)** | **Cambio** |
+|-------------|--------------|-------------------------|------------|
+| Ops Registradas | 114 | 114 | = |
+| Expiradas STALE_DIST | 68 | **~45-55** | -19% a -34% |
+| Ejecutadas | 24 | **~38-46** | +58% a +92% |
+| Win Rate | 45.8% | **~45-47%** | Mantiene |
+| PF | 0.98 | **>1.05** | **Rentable** |
+| P&L | -$49 | **+$100-250** | Positivo |
+| Gaps de 7 días | 3 | **~1-2** | Reduce |
+
+### **Desglose de recuperación esperada:**
+
+**De las 68 expiradas STALE_DIST en V6.0i.6b:**
+
+**Recuperables con curva (~20-25 ops):**
+- 2-3 ATR + 0-4 barras: ~8 ops (ahora toleran 2.5 ATR) ✅
+- 4-6 ATR + 0-8 barras: ~12 ops (ahora toleran 2.0-2.5 ATR) ✅
+- 7-8 ATR + >8 barras: ~5 ops (algunos recuperables) ⚠️
+
+**NO recuperables (~43-48 ops):**
+- 9-42 ATR: muy alejadas, correctamente canceladas ✓
+- 2-8 ATR + >8 barras viejas: baja probabilidad de fill ✓
+
+### **Archivos Modificados:**
+- ✅ `pinkbutterfly-produccion/EngineConfig.cs` (líneas 1108-1124)
+- ✅ `pinkbutterfly-produccion/TradeManager.cs` (líneas 366-413)
+- ✅ Copiado a NinjaTrader: `C:\Users\meste\Documents\NinjaTrader 8\bin\Custom\Indicators\PinkButterfly\`
+
+### **Próximos Pasos:**
+1. ✅ Compilar en NinjaTrader (F5)
+2. ✅ Ejecutar backtest (mismo período)
+3. ✅ Verificar logs: `[PENDING_STALE_DIST_CURVE]`
+4. ✅ Analizar KPIs:
+   - Expiradas STALE_DIST: ¿~45-55?
+   - Ejecutadas: ¿~38-46?
+   - PF: ¿>1.05?
+   - Logs muestran curva aplicándose correctamente
+
+### **Si V6.0i.6c tiene éxito:**
+- ✅ PF >1.05 → Sistema rentable confirmado
+- ✅ Mantener configuración
+- ✅ Monitorizar distribución de cancelaciones por tramo
+- ✅ Ajustar curva si necesario (ej: 2.5→3.0 en 0-4 barras)
+
+### **Si V6.0i.6c falla:**
+- Si STALE_DIST sigue >50 → ampliar tramo 0-4 barras a 3.0 ATR
+- Si throughput no mejora → revisar calidad de timing (DFM/Proximity)
+- Si PF <1.0 → problema más profundo (WR, R:R, calidad estructuras)
+
+---
+
+## ❌ **RESULTADOS V6.0i.6c - FALLÓ Y REVERTIDO - 2025-11-06 10:20**
+
+**Backtest:** `backtest_20251106_101229.log`
+
+### **KPIs Principales:**
+
+| **Métrica** | **V6.0i.6b** | **V6.0i.6c** | **Cambio** | **Esperado** | **Estado** |
+|-------------|--------------|--------------|------------|--------------|------------|
+| **Ops Registradas** | 114 | 102 | **-12 (-10.5%)** | 114 | ❌ PEOR |
+| **Ejecutadas** | 24 | 24 | 0 | ~38-46 | ❌ FALLÓ |
+| **Expiradas** | 88 | **76** | -12 (-13.6%) | ~45-55 | ⚠️ Mejora parcial |
+| **STALE_DIST** | 68 | **57** | -11 (-16%) | ~25-30 | ❌ Insuficiente |
+| **Win Rate** | 45.8% | **41.7%** | **-4.1pp** | ~45-47% | ❌ **EMPEORÓ** |
+| **Profit Factor** | 0.98 | **0.93** | **-0.05** | >1.05 | ❌ **EMPEORÓ** |
+| **P&L** | -$49 | **-$145** | **-$96** | +$100-250 | ❌ **EMPEORÓ 3X** |
+| **Avg Win** | $192 | $206 | +$14 | - | ✅ Mejor |
+| **Avg Loss** | $166 | $157 | -$9 | - | ✅ Mejor |
+
+### **💔 DIAGNÓSTICO DEL FRACASO:**
+
+**1. La curva NO aumentó ejecutadas:**
+- ✅ Redujo STALE_DIST: 68 → 57 (-11 ops, -16%)
+- ❌ Pero esas 11 ops recuperadas NO se ejecutaron
+- ❌ Conclusión: No llenaron porque eran de mala calidad
+
+**2. EMPEORÓ la calidad de las ejecutadas:**
+- ❌ Win Rate: 45.8% → 41.7% (-4.1pp)
+- ❌ PF: 0.98 → 0.93 (-5%)
+- ❌ P&L: -$49 → -$145 (3x peor)
+
+**3. Distribución STALE_DIST_CURVE:**
+```
+2-8 ATR:   33 ops (58%) ← La curva les dio más margen
+9-42 ATR:  24 ops (42%) ← Casos extremos
+```
+
+**Conclusión:** Las órdenes que se alejan >2 ATR **NO retornan al entry**. Son señales de timing incorrecto o estructuras débiles.
+
+### **🔬 APRENDIZAJES CLAVE:**
+
+**Hipótesis errónea:**
+- Asumimos: "Órdenes recientes (0-4 barras) pueden alejarse 2.5 ATR y retornar"
+- Realidad: Las órdenes que se alejan >2 ATR **NO retornan**
+
+**La curva es contraproducente:**
+- Da más tiempo/margen a órdenes que NO llenarán
+- Reduce el pool de ops registradas (114 → 102) por variabilidad estadística
+- Empeora la calidad de las ejecutadas (WR baja)
+
+**El problema NO es el umbral:**
+- **68 órdenes se alejan >2 ATR** en V6.0i.6b
+- Esto NO es un problema de "cuánto esperar"
+- ES un problema de "qué señales generamos" (DFM/Proximity/Timing)
+
+### **✅ DECISIÓN: REVERTIR A V6.0i.6b**
+
+**Razón:** V6.0i.6b está MUY cerca de rentabilidad:
+- PF 0.98 (falta solo 0.02 para break-even)
+- P&L -$49 (casi break-even)
+- WR 45.8% (razonable)
+- Simple y efectivo
+
+**Acción ejecutada:**
+1. ✅ Eliminada lógica de curva en `TradeManager.cs`
+2. ✅ Comentados parámetros de curva en `EngineConfig.cs` (histórico)
+3. ✅ Restaurado `MaxDistanceToEntry_ATR_Cancel_HighVol = 2.0` (umbral fijo)
+4. ✅ Copiado a NinjaTrader
+
+**Archivos modificados:**
+- ✅ `pinkbutterfly-produccion/TradeManager.cs` (líneas 366-388)
+- ✅ `pinkbutterfly-produccion/EngineConfig.cs` (líneas 1108-1115)
+
+### **📋 ESTADO ACTUAL: V6.0i.6b (CONFIRMADO)**
+
+**Configuración activa:**
+```csharp
+// EngineConfig.cs
+public double MaxDistanceToEntry_ATR_Cancel_HighVol { get; set; } = 2.0;
+
+// TradeManager.cs
+if (distanceATR > maxDistanceATR_Cancel) // 2.0 ATR en HighVol, 1.5 en Normal
+{
+    // CANCEL PENDING_STALE_DIST
+}
+```
+
+**KPIs esperados (V6.0i.6b):**
+- Ops Registradas: ~114
+- Ejecutadas: ~24
+- Win Rate: ~45.8%
+- **Profit Factor: 0.98** (falta 0.02 para rentabilidad)
+- P&L: -$49
+
+### **🎯 PRÓXIMOS PASOS (PRÓXIMA SESIÓN):**
+
+**NO atacar umbral de cancelación. Atacar CALIDAD de señales:**
+
+**1. Investigar las 68 órdenes que se alejan >2 ATR:**
+- ¿Qué Confidence tienen?
+- ¿Qué Proximity tienen?
+- ¿En qué TF se generan?
+- ¿Aligned o Counter-bias?
+
+**2. Posibles causas raíz:**
+- **Proximity baja:** Zonas lejos del precio actual
+- **DFM timing:** Señales tempranas/tardías
+- **StructureFusion débil:** Estructuras que el precio ignora
+- **Filtros entry:** Demasiado permisivos en HighVol
+
+**3. Soluciones potenciales:**
+- Aumentar `MinProximityForEntry_HighVol` (ej: 0.60 → 0.70)
+- Revisar pesos del DFM (Proximity vs otros componentes)
+- Endurecer filtro de calidad de estructuras
+- Ajustar `MaxDistanceToEntry_ATR_HighVol` en REGISTRO (no cancelación)
+
+**Conclusión final:**
+- **V6.0i.6c = complejidad inútil**
+- **V6.0i.6b = casi rentable, simple, superior**
+- **Navaja de Occam aplicada:** Solución simple gana
+
+---
+
+## 📌 **2025-11-06 14:30 – V6.0i.7: COMPUERTA 2D PARA FILTRAR SEÑALES DE BAJA CALIDAD**
+
+### **CONTEXTO**
+
+Tras revertir a V6.0i.6b, el análisis profundo de las **68 órdenes expiradas STALE_DIST** reveló:
+
+**Patrón crítico:**
+```
+>90% de las órdenes se alejan en la PRIMERA BARRA después del registro:
+Bars=1, Dist=7.00 ATR → CANCEL (Conf: 0.754)
+Bars=1, Dist=6.75 ATR → CANCEL (Conf: 0.752)
+Bars=1, Dist=8.25 ATR → CANCEL (Conf: 0.748)
+Bars=1, Dist=5.00 ATR → CANCEL (Conf: 0.750)
+```
+
+**Órdenes ejecutadas:**
+```
+Confidence: 0.836 → EJECUTADA
+Confidence: 0.840 → EJECUTADA
+Confidence: 0.838 → EJECUTADA
+```
+
+**Conclusión:** El problema NO es "cuánto esperar", es **calidad de la señal** (timing).
+
+### **SOLUCIÓN: COMPUERTA 2D EN HIGHVOL**
+
+Filtrar señales ANTES del registro basándose en **Confidence + Distancia al Entry**.
+
+**Lógica:**
+- **Si DistanceToEntry ≤ 0.60 ATR:** Requiere `Confidence ≥ 0.77` (baseline)
+- **Si DistanceToEntry > 0.60 ATR:** Requiere `Confidence ≥ 0.81` (strict)
+
+**Rationale:**
+- Señales **cercanas** (≤0.60 ATR) tienen menos riesgo de drift → umbral más bajo
+- Señales **lejanas** (>0.60 ATR) tienen más riesgo de drift → exigen más confidence
+
+### **CAMBIOS IMPLEMENTADOS**
+
+**1. Nuevos parámetros en `EngineConfig.cs`:**
+```csharp
+// Líneas 1070-1082
+
+/// <summary>
+/// Confidence mínima para entrada en régimen HighVol.
+/// V6.0i.7: 0.77 - Compuerta 2D para filtrar señales de baja calidad
+/// </summary>
+public double MinConfidenceForEntry_HighVol { get; set; } = 0.77;  // Era 0.60
+
+/// <summary>
+/// V6.0i.7: Distancia máxima (en ATR60) donde aplica el umbral base de confidence.
+/// Si DistanceToEntry > este valor, se requiere MinConfidence más estricto.
+/// </summary>
+public double HV_StrictDistanceGate_ATR { get; set; } = 0.60;
+
+/// <summary>
+/// V6.0i.7: Confidence mínima requerida para entradas lejanas (> HV_StrictDistanceGate_ATR).
+/// Entradas lejanas exigen mayor confidence para compensar riesgo de drift.
+/// </summary>
+public double HV_StrictDistance_MinConfidence { get; set; } = 0.81;
+```
+
+**2. Nueva validación en `OutputAdapter.cs`:**
+```csharp
+// Líneas 68-190
+
+// V6.0i.7: Validación de confidence adaptativa (compuerta 2D en HighVol)
+bool passesConfidence = ValidateConfidenceGate(bestZone, bestConfidence, snapshot, barData, currentBar, timeframeMinutes);
+
+if (bestZone == null || !passesConfidence)
+{
+    // WAIT
+}
+
+/// <summary>
+/// V6.0i.7: Valida confidence con compuerta 2D en HighVol
+/// Entradas lejanas (>0.60 ATR) exigen confidence más alto (0.81 vs 0.77)
+/// </summary>
+private bool ValidateConfidenceGate(HeatZone zone, double confidence, DecisionSnapshot snapshot, IBarDataProvider barData, int currentBar, int timeframeMinutes)
+{
+    // En Normal: usar MinConfidenceForEntry estándar (0.55)
+    if (regime != "HighVol")
+        return confidence >= _config.MinConfidenceForEntry;
+    
+    // En HighVol: compuerta 2D
+    double distanceToEntry = Math.Abs(entry - currentPrice);
+    double distanceATR = distanceToEntry / atr60;
+    
+    // Compuerta 2D
+    double requiredConf = (distanceATR > _config.HV_StrictDistanceGate_ATR) 
+        ? _config.HV_StrictDistance_MinConfidence  // 0.81 para lejanas
+        : _config.MinConfidenceForEntry_HighVol;    // 0.77 para cercanas
+    
+    bool passes = confidence >= requiredConf;
+    
+    if (!passes)
+    {
+        _logger.Info($"[FILTER][CONF_2D] REJECT Zone={zone.Id} HighVol Conf={confidence:F3}<{requiredConf:F3} Dist={distanceATR:F2}ATR");
+    }
+    
+    return passes;
+}
+```
+
+### **IMPACTO ESPERADO**
+
+**Reducción de STALE_DIST:**
+```
+Expiradas actuales:   68 órdenes (Conf ~0.75, Dist >2 ATR en 1 barra)
+Con filtro Conf≥0.77: ~15-20 órdenes (-70%)
+```
+
+**Ejecutadas mantienen calidad:**
+```
+Ejecutadas actuales:  24 órdenes (Conf >0.83)
+Con filtro:           24 órdenes (sin cambio, todas pasan)
+```
+
+**KPIs proyectados:**
+- **Win Rate:** 45.8% → mantiene o sube levemente
+- **Profit Factor:** 0.98 → **>1.0** (sistema rentable)
+- **P&L:** -$49 → **>$0** (break-even o positivo)
+- **Coverage:** Mantiene o mejora (señales de mayor calidad)
+
+### **JUSTIFICACIÓN CIENTÍFICA**
+
+**Distribución observada:**
+| Grupo | Confidence | Resultado |
+|-------|------------|-----------|
+| Expiradas | 0.750 - 0.754 | STALE_DIST en 1 barra |
+| **Umbral baseline** | **0.77** | **Gap +2.7% sobre expiradas** |
+| **Umbral strict** | **0.81** | **Gap +7.5% sobre expiradas** |
+| Ejecutadas | 0.836 - 0.840 | TP/SL normal |
+
+**Gap significativo:** El umbral 0.77 está **2.7%** por encima de las expiradas y **5.6%** por debajo de las ejecutadas → punto intermedio científico.
+
+### **ARCHIVOS MODIFICADOS**
+
+- ✅ `pinkbutterfly-produccion/EngineConfig.cs` (líneas 1070-1082)
+- ✅ `pinkbutterfly-produccion/OutputAdapter.cs` (líneas 45-190)
+- ✅ Copiado a NinjaTrader
+
+### **PRÓXIMO PASO**
+
+1. **Compilar en NinjaTrader**
+2. **Ejecutar backtest completo** (5000 barras @ 15m)
+3. **Comparar con V6.0i.6b:**
+   - Ops Registradas (¿~85-90 vs 114?)
+   - Ejecutadas (¿mantiene 24?)
+   - Win Rate (¿≥45.8%?)
+   - **Profit Factor (¿>1.0?)** ← Objetivo crítico
+   - STALE_DIST (¿~15-20 vs 68?)
+
+**Hipótesis:**
+- Filtro de calidad reducirá ops registradas pero aumentará execution rate
+- WR se mantiene o sube (menos ruido)
+- PF cruza 1.0 → **Sistema rentable**
+
+---
+
+

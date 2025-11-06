@@ -386,100 +386,90 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             }
             
             // ========================================================================
-            // V6.0d: DOBLE CERROJO - Defensa en profundidad (puntos + ATR + alta vol)
+            // V6.0i.3b: HARD CAP SL + Gate AND solo en TP
             // ========================================================================
             
             double slDistancePoints = riskDistance;
             double tpDistancePoints = rewardDistance;
 
-            // === VALIDACIÓN 1: Rechazo por SL en puntos absolutos ===
-            if (slDistancePoints > _config.MaxSLDistancePoints)
+            // Régimen (con histéresis calculado por ContextManager)
+            string regime = snapshot.MarketRegime ?? "Normal";
+            bool isHighVol = (regime == "HighVol");
+
+            // Límites por régimen (reutiliza propiedades existentes de EngineConfig)
+            double maxSLPoints = isHighVol ? _config.MaxSLDistancePoints_HighVol : _config.MaxSLDistancePoints;
+            double maxSLATR    = isHighVol ? _config.MaxSLDistanceATR_HighVol    : _config.MaxSLDistanceATR;
+            double maxTPPoints = isHighVol ? _config.MaxTPDistancePoints_HighVol : _config.MaxTPDistancePoints;
+            double maxTPATR    = isHighVol ? _config.MaxTPDistanceATR_HighVol    : _config.MaxTPDistanceATR;
+
+            // Tolerancia (5%) solo para ATR, NO para puntos en SL
+            double tol = 1.0 + _config.ValidationTolerancePercent;
+            double tolSLATR    = maxSLATR * tol;
+            double tolTPPoints = maxTPPoints * tol;
+            double tolTPATR    = maxTPATR * tol;
+
+            // ========================================================================
+            // 1) HARD CAP SL por puntos (sin tolerancia, sin AND)
+            // ========================================================================
+            if (slDistancePoints > maxSLPoints)
             {
                 zone.Metadata["RiskCalculated"] = false;
-                zone.Metadata["RejectReason"] = $"SL>{_config.MaxSLDistancePoints}pts";
-                _logger.Info($"[RISK][SL_CHECK_FAIL] Zone={zone.Id} SL={slDistancePoints:F2}pts (>{_config.MaxSLDistancePoints}) SLDistATR={slDistanceATR:F2} SLTF={slTF} ATR={atrForSL:F2} REJECTED");
+                zone.Metadata["RejectReason"] = $"SL>{maxSLPoints}pts_HARD";
+                _logger.Info($"[RISK][SL_CHECK_FAIL] Zone={zone.Id} Regime={regime} SL={slDistancePoints:F2}pts>{maxSLPoints:F2}pts (HARD_CAP) REJECTED");
                 return;
             }
 
-            // === VALIDACIÓN 2: Rechazo por TP en puntos absolutos ===
-            if (tpDistancePoints > _config.MaxTPDistancePoints)
+            // ========================================================================
+            // 2) Validación SL-ATR con tolerancia (Gate OR)
+            // ========================================================================
+            if (slDistanceATR > tolSLATR)
             {
                 zone.Metadata["RiskCalculated"] = false;
-                zone.Metadata["RejectReason"] = $"TP>{_config.MaxTPDistancePoints}pts";
-                _logger.Info($"[RISK][TP_CHECK_FAIL] Zone={zone.Id} TP={tpDistancePoints:F2}pts (>{_config.MaxTPDistancePoints}) TPDistATR={tpDistanceATR:F2} TPTF={tpTF} ATR={atrForTP:F2} REJECTED");
+                zone.Metadata["RejectReason"] = $"SL_ATR>{maxSLATR}ATR";
+                _logger.Info($"[RISK][SL_CHECK_FAIL] Zone={zone.Id} Regime={regime} SL_ATR={slDistanceATR:F2}>{tolSLATR:F2}ATR (with tol) REJECTED");
                 return;
+            }
+            else if (slDistanceATR > maxSLATR && slDistanceATR <= tolSLATR)
+            {
+                _logger.Info($"[RISK][NEAR_LIMIT] Zone={zone.Id} Regime={regime} SL={slDistancePoints:F2}pts/{slDistanceATR:F2}ATR Limits={maxSLPoints:F2}pts/{maxSLATR:F2}ATR ACCEPTED");
             }
 
-            // === VALIDACIÓN 3: Límites ATR adaptativos según régimen (V6.0i) ===
-            // El régimen ya fue detectado en ContextManager con histéresis
-            string regime = snapshot.MarketRegime ?? "Normal"; // Fallback si no está disponible
-            double maxSLATR = (regime == "HighVol") ? _config.MaxSLDistanceATR_HighVol : _config.MaxSLDistanceATR;
-            double maxTPATR = (regime == "HighVol") ? _config.MaxTPDistanceATR_HighVol : _config.MaxTPDistanceATR;
-            
-            if (slDistanceATR > maxSLATR)
+            // ========================================================================
+            // 3) Gate AND + tolerancia para TP (solo en HighVol)
+            // ========================================================================
+            bool tpExPts = tpDistancePoints > tolTPPoints;
+            bool tpExATR = tpDistanceATR > tolTPATR;
+
+            // Gate: AND en HighVol, OR en Normal
+            bool rejectTP = isHighVol ? (tpExATR && tpExPts) : (tpExATR || tpExPts);
+
+            if (rejectTP)
             {
                 zone.Metadata["RiskCalculated"] = false;
-                zone.Metadata["RejectReason"] = $"SL>{maxSLATR}ATR_Regime={regime}";
-                _logger.Warning($"[RISK][SL_ATR_FAIL] Zone={zone.Id} Regime={regime} SLDistATR={slDistanceATR:F2} > Limit={maxSLATR:F2} SL={slDistancePoints:F2}pts REJECTED");
+                zone.Metadata["RejectReason"] = isHighVol
+                    ? $"TP_CHECK_FAIL HighVol: {tpDistancePoints:F2}>{maxTPPoints:F2}pts AND {tpDistanceATR:F2}>{maxTPATR:F2}ATR"
+                    : $"TP_CHECK_FAIL Normal: {tpDistancePoints:F2}>{maxTPPoints:F2}pts OR {tpDistanceATR:F2}>{maxTPATR:F2}ATR";
+                _logger.Info($"[RISK][TP_CHECK_FAIL] Zone={zone.Id} Regime={regime} Gate={(isHighVol ? "AND" : "OR")} TP={tpDistancePoints:F2}pts/{tpDistanceATR:F2}ATR Limits={maxTPPoints:F2}pts/{maxTPATR:F2}ATR REJECTED");
                 return;
             }
-            
-            if (tpDistanceATR > maxTPATR)
+            else if (tpExPts || tpExATR)
             {
-                zone.Metadata["RiskCalculated"] = false;
-                zone.Metadata["RejectReason"] = $"TP>{maxTPATR}ATR_Regime={regime}";
-                _logger.Warning($"[RISK][TP_ATR_FAIL] Zone={zone.Id} Regime={regime} TPDistATR={tpDistanceATR:F2} > Limit={maxTPATR:F2} TP={tpDistancePoints:F2}pts REJECTED");
-                return;
+                _logger.Info($"[RISK][NEAR_LIMIT] Zone={zone.Id} Regime={regime} TP={tpDistancePoints:F2}pts/{tpDistanceATR:F2}ATR Limits={maxTPPoints:F2}pts/{maxTPATR:F2}ATR ACCEPTED");
             }
 
-            // Trazas de auditoría cuando PASAN todas las validaciones (V6.0i: incluir régimen)
-            _logger.Debug($"[RISK][SL_CHECK_PASS] Zone={zone.Id} Regime={regime} SL: {slDistancePoints:F2}pts/{slDistanceATR:F2}ATR (Limit={_config.MaxSLDistancePoints}pts/{maxSLATR}ATR) TF={slTF}");
-            _logger.Debug($"[RISK][TP_CHECK_PASS] Zone={zone.Id} Regime={regime} TP: {tpDistancePoints:F2}pts/{tpDistanceATR:F2}ATR (Limit={_config.MaxTPDistancePoints}pts/{maxTPATR}ATR) TF={tpTF}");
+            // Trazas de auditoría cuando pasan validaciones
+            _logger.Debug($"[RISK][SL_CHECK_PASS] Zone={zone.Id} Regime={regime} SL: {slDistancePoints:F2}pts/{slDistanceATR:F2}ATR (Limit={maxSLPoints}pts/{maxSLATR}ATR) TF={slTF}");
+            _logger.Debug($"[RISK][TP_CHECK_PASS] Zone={zone.Id} Regime={regime} TP: {tpDistancePoints:F2}pts/{tpDistanceATR:F2}ATR (Limit={maxTPPoints}pts/{maxTPATR}ATR) TF={tpTF}");
             
             // Guardar drivers SIEMPRE (antes de posibles returns por rechazo)
             zone.Metadata["SLDistanceATR"] = slDistanceATR;
             zone.Metadata["TPDistanceATR"] = tpDistanceATR;
 
             // ========================================================================
-            // VALIDACIONES DE RISK:REWARD (OPTIMIZACIÓN CRÍTICA)
+            // VALIDACIONES ADICIONALES (TP mínimo + R:R)
             // ========================================================================
             
-            // 1. Validar SL máximo (en ATR)
-            if (slDistanceATR > _config.MaxSLDistanceATR)
-            {
-                // Clasificación por bin y alineación antes de return
-                bool aligned = zone.Metadata.ContainsKey("AlignedWithBias") && (bool)zone.Metadata["AlignedWithBias"];
-                int binIdx = 0;
-                if (slDistanceATR < 10.0) binIdx = 0;
-                else if (slDistanceATR < 15.0) binIdx = 1;
-                else if (slDistanceATR < 20.0) binIdx = 2;
-                else if (slDistanceATR < 25.0) binIdx = 3;
-                else binIdx = 4;
-                zone.Metadata["SLRejectedBin"] = binIdx;
-                zone.Metadata["RejectedAligned"] = aligned;
-                double proxDbg = zone.Metadata.ContainsKey("ProximityFactor") ? (double)zone.Metadata["ProximityFactor"] : 0.0;
-                _logger.Info(string.Format(
-                    "[DIAGNOSTICO][Risk] RejSL: Dir={0} Aligned={1} SLDistATR={2:F2} Bin={3} Prox={4:F3} Core={5:F3}",
-                    zone.Direction, aligned, slDistanceATR, binIdx, proxDbg, zone.Score));
-                _logger.Warning(string.Format(
-                    "[RiskCalculator] ⚠ HeatZone {0} RECHAZADA: SL demasiado lejano ({1:F2} ATR > límite {2:F2} ATR)",
-                    zone.Id, slDistanceATR, _config.MaxSLDistanceATR));
-                
-                zone.Metadata["RiskCalculated"] = false;
-                zone.Metadata["RejectReason"] = string.Format("SL absurdo: {0:F2} ATR (límite: {1:F2})", slDistanceATR, _config.MaxSLDistanceATR);
-                // Muestreo forense opcional
-                if (_config.RiskDetailSamplingRate > 0 && (_riskRejectionCounter % _config.RiskDetailSamplingRate == 0))
-                {
-                    double currentPriceDbg = barData.GetClose(zone.TFDominante, currentBar);
-                    _logger.Info(string.Format(
-                        "[DIAGNOSTICO][Risk] DETALLE FORENSE: Zone={0} Dir={1} Entry={2:F2} SL={3:F2} TP={4:F2} Current={5:F2}",
-                        zone.Id, zone.Direction, entry, stopLoss, takeProfit, currentPriceDbg));
-                }
-                _riskRejectionCounter++;
-                return;
-            }
-            
-            // 2. Validar TP mínimo (en ATR)
+            // 1. Validar TP mínimo (en ATR)
             if (tpDistanceATR < _config.MinTPDistanceATR)
             {
                 _logger.Warning(string.Format(
@@ -499,7 +489,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 return;
             }
             
-            // 3. Validar R:R mínimo
+            // 2. Validar R:R mínimo
             if (actualRR < _config.MinRiskRewardRatio)
             {
                 _logger.Warning(string.Format(

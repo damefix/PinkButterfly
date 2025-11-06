@@ -62,6 +62,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         private readonly TradeLogger _tradeLogger;
         private readonly EngineConfig _config;
         private readonly Dictionary<string, int> _cancelledOrdersCooldown; // Key: SourceStructureId, Value: BarExpiration
+        private readonly Dictionary<string, int> _bosFirstDetection; // V6.0i.6: Key: TradeId, Value: BarIndex primera detección BOS
         private readonly double _contractSize;
         private readonly double _pointValue;
 
@@ -74,6 +75,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             _pointValue = pointValue;
             _trades = new List<TradeRecord>();
             _cancelledOrdersCooldown = new Dictionary<string, int>();
+            _bosFirstDetection = new Dictionary<string, int>(); // V6.0i.6
         }
 
         /// <summary>
@@ -168,9 +170,10 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
         /// <summary>
         /// Actualiza el estado de todas las órdenes en la barra actual
+        /// V6.0i.5: Añadido parámetro currentRegime para aplicar gracia BOS en HighVol
         /// </summary>
         public void UpdateTrades(double currentHigh, double currentLow, int currentBar, DateTime currentBarTime, double currentPrice, 
-                                 CoreEngine coreEngine, IBarDataProvider barData)
+                                 CoreEngine coreEngine, IBarDataProvider barData, string currentRegime = "Normal")
         {
             var activeTrades = _trades.Where(t => 
                 t.Status == TradeStatus.PENDING || t.Status == TradeStatus.EXECUTED
@@ -181,7 +184,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 if (trade.Status == TradeStatus.PENDING)
                 {
                     // PASO 1: Verificar caducidad inteligente ANTES de verificar ejecución
-                    if (CheckInvalidation(trade, currentPrice, currentBar, currentBarTime, coreEngine, barData))
+                    if (CheckInvalidation(trade, currentPrice, currentBar, currentBarTime, coreEngine, barData, currentRegime))
                         continue; // La orden fue cancelada, pasar a la siguiente
 
                     // PASO 2: Determinar tipo de orden (LIMIT vs STOP) según precio de registro
@@ -264,9 +267,10 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
         /// <summary>
         /// Verifica si una orden PENDING debe ser cancelada por invalidación estructural
+        /// V6.0i.5: Añadido parámetro currentRegime para aplicar gracia BOS en HighVol
         /// </summary>
         private bool CheckInvalidation(TradeRecord trade, double currentPrice, int currentBar, DateTime currentBarTime,
-                                       CoreEngine coreEngine, IBarDataProvider barData)
+                                       CoreEngine coreEngine, IBarDataProvider barData, string currentRegime)
         {
             // REGLA 1 (PRIORITARIA): Caducidad por Invalidación Estructural
             // La estructura que generó la orden ya no existe, está inactiva, o su Score decayó
@@ -306,7 +310,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             }
 
             // REGLA 2: Caducidad por BOS/CHoCH contradictorio
-            if (CheckBOSContradictory(trade, coreEngine, barData, currentBarTime))
+            if (CheckBOSContradictory(trade, coreEngine, barData, currentBarTime, currentRegime))
             {
                 trade.Status = TradeStatus.CANCELLED;
                 trade.ExitBar = currentBar;
@@ -322,40 +326,61 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 return true;
             }
 
-            // REGLA 3 (FAIL-SAFE): Caducidad por Tiempo/Distancia absoluta
-            double atr = barData.GetATR(trade.TFDominante, currentBar, 14);
-            double distanceToEntry = Math.Abs(currentPrice - trade.Entry);
-            int barsWaiting = currentBar - trade.EntryBar;
+            // ========================================================================
+            // REGLA 3 (V6.0i.6): PENDING STALENESS - Tiempo y Distancia adaptativa
+            // ========================================================================
             
-            double maxBarsWaiting = 100; // ~5 horas en TF 5m, ~25 horas en TF 15m
-            double maxAbsoluteDistance = 30.0 * atr; // 30 ATR de distancia absoluta
-
-            if (barsWaiting > maxBarsWaiting)
+            // Calcular barras transcurridas en TF decisión
+            int tf = _config.DecisionTimeframeMinutes;
+            int currentIdx = barData.GetBarIndexFromTime(tf, currentBarTime);
+            int entryIdx   = barData.GetBarIndexFromTime(tf, trade.EntryBarTime);
+            int barsWaiting = Math.Max(0, currentIdx - entryIdx);
+            
+            // Límites adaptivos por régimen
+            int maxBarsToFill = (currentRegime == "HighVol") 
+                ? _config.MaxBarsToFillEntry_HighVol 
+                : _config.MaxBarsToFillEntry;
+            double maxDistanceATR_Cancel = (currentRegime == "HighVol")
+                ? _config.MaxDistanceToEntry_ATR_Cancel_HighVol
+                : _config.MaxDistanceToEntry_ATR_Cancel;
+            
+            // ========================================================================
+            // 3A: Staleness por TIEMPO (barras esperando)
+            // ========================================================================
+            if (barsWaiting > maxBarsToFill)
             {
                 trade.Status = TradeStatus.CANCELLED;
                 trade.ExitBar = currentBar;
                 trade.ExitBarTime = currentBarTime;
-                trade.ExitReason = "EXPIRED_TIME";
-                _logger.Warning($"[TradeManager] ❌ ORDEN EXPIRADA (Tiempo): {trade.Action} @ {trade.Entry:F2} | Barras esperando: {barsWaiting}");
+                trade.ExitReason = "PENDING_STALE_TIME";
+                _logger.Warning($"[TradeManager][PENDING_STALE_TIME] Trade={trade.Id} {trade.Action} @ {trade.Entry:F2} Regime={currentRegime} Waiting={barsWaiting}>{maxBarsToFill} → CANCEL");
                 
                 // Log to CSV
-                _tradeLogger?.LogOrderExpired(trade.Action, trade.Entry, currentBar, currentBarTime, $"Tiempo: {barsWaiting} barras");
+                _tradeLogger?.LogOrderExpired(trade.Action, trade.Entry, currentBar, currentBarTime, $"STALE_TIME: {barsWaiting}>{maxBarsToFill}bars");
                 
                 // Añadir estructura al cooldown
                 AddToCooldown(trade.SourceStructureId, currentBar);
                 return true;
             }
             
-            if (distanceToEntry > maxAbsoluteDistance)
+            // ========================================================================
+            // 3B: Staleness por DISTANCIA (se aleja del entry en ATR60)
+            // V6.0i.6b: Umbral fijo adaptativo por régimen (V6.0i.6c curva revertida)
+            // ========================================================================
+            double atr60 = barData.GetATR(60, barData.GetBarIndexFromTime(60, currentBarTime), 14);
+            double distanceToEntry = Math.Abs(currentPrice - trade.Entry);
+            double distanceATR = (atr60 > 0) ? (distanceToEntry / atr60) : 999.0;
+            
+            if (distanceATR > maxDistanceATR_Cancel)
             {
                 trade.Status = TradeStatus.CANCELLED;
                 trade.ExitBar = currentBar;
                 trade.ExitBarTime = currentBarTime;
-                trade.ExitReason = "EXPIRED_DISTANCE";
-                _logger.Warning($"[TradeManager] ❌ ORDEN EXPIRADA (Distancia): {trade.Action} @ {trade.Entry:F2} | Distancia: {distanceToEntry:F2} > {maxAbsoluteDistance:F2}");
+                trade.ExitReason = "PENDING_STALE_DIST";
+                _logger.Warning($"[TradeManager][PENDING_STALE_DIST] Trade={trade.Id} {trade.Action} @ {trade.Entry:F2} Regime={currentRegime} Dist={distanceATR:F2}ATR>{maxDistanceATR_Cancel:F2}ATR → CANCEL");
                 
                 // Log to CSV
-                _tradeLogger?.LogOrderExpired(trade.Action, trade.Entry, currentBar, currentBarTime, $"Distancia: {distanceToEntry:F2} pts");
+                _tradeLogger?.LogOrderExpired(trade.Action, trade.Entry, currentBar, currentBarTime, $"STALE_DIST: {distanceATR:F2}>{maxDistanceATR_Cancel:F2}ATR");
                 
                 // Añadir estructura al cooldown
                 AddToCooldown(trade.SourceStructureId, currentBar);
@@ -390,8 +415,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
         /// <summary>
         /// Verifica si hay un BOS/CHoCH contradictorio a la orden
+        /// V6.0i.6: Debounce BOS - Confirmar que el BOS contradictorio persiste antes de cancelar
         /// </summary>
-        private bool CheckBOSContradictory(TradeRecord trade, CoreEngine coreEngine, IBarDataProvider barData, DateTime currentBarTime)
+        private bool CheckBOSContradictory(TradeRecord trade, CoreEngine coreEngine, IBarDataProvider barData, DateTime currentBarTime, string currentRegime)
         {
             // V5.6.6: Sesgo único con cálculo directo EMA200@60 para cancelaciones si está habilitado
             string currentBias = coreEngine.CurrentMarketBias;
@@ -433,23 +459,78 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 catch { /* si falla, mantener currentMarketBias */ }
             }
             
-            // Para BUY LIMIT, cancelar solo si el bias cambió a Bearish
+            // ========================================================================
+            // V6.0i.6: Detectar si hay BOS contradictorio
+            // ========================================================================
+            bool isBOSContradictory = false;
+            
+            // Para BUY, contradictorio si bias es Bearish
             if (trade.Action == "BUY" && currentBias == "Bearish")
-            {
-                _logger.Warning($"[TradeManager] GlobalBias contradictorio: {trade.Action} @ {trade.Entry:F2} | Bias cambió a {currentBias}");
-                _logger.Info($"[DIAGNOSTICO][TM] Cancel_BOS Action={trade.Action} Bias={currentBias}");
-                return true;
-            }
-
-            // Para SELL LIMIT, cancelar solo si el bias cambió a Bullish
+                isBOSContradictory = true;
+            
+            // Para SELL, contradictorio si bias es Bullish
             if (trade.Action == "SELL" && currentBias == "Bullish")
-            {
-                _logger.Warning($"[TradeManager] GlobalBias contradictorio: {trade.Action} @ {trade.Entry:F2} | Bias cambió a {currentBias}");
-                _logger.Info($"[DIAGNOSTICO][TM] Cancel_BOS Action={trade.Action} Bias={currentBias}");
-                return true;
-            }
+                isBOSContradictory = true;
 
-            return false;
+            // ========================================================================
+            // V6.0i.6: DEBOUNCE BOS - Confirmar persistencia antes de cancelar
+            // ========================================================================
+            if (isBOSContradictory)
+            {
+                // Aplicar debounce solo en HighVol si está configurado
+                bool applyDebounce = _config.EnableBOSDebounceInHighVolOnly ? (currentRegime == "HighVol") : true;
+                
+                if (applyDebounce && trade.Status == TradeStatus.PENDING)
+                {
+                    // Calcular índice actual en TF decisión
+                    int tf = _config.DecisionTimeframeMinutes;
+                    int currentIdx = barData.GetBarIndexFromTime(tf, currentBarTime);
+                    
+                    // Si es la primera detección, registrar y NO cancelar
+                    if (!_bosFirstDetection.ContainsKey(trade.Id))
+                    {
+                        _bosFirstDetection[trade.Id] = currentIdx;
+                        _logger.Info($"[TradeManager][BOS_DEBOUNCE_START] Trade={trade.Id} Action={trade.Action} Regime={currentRegime} FirstDetect={currentIdx} → Esperando confirmación");
+                        return false; // NO cancelar en primera detección
+                    }
+                    
+                    // Si ya está registrado, verificar si han pasado suficientes barras
+                    int firstIdx = _bosFirstDetection[trade.Id];
+                    int barsWithBOS = currentIdx - firstIdx;
+                    
+                    if (barsWithBOS >= _config.BOSDebounceBarReq)
+                    {
+                        // BOS persistió suficiente tiempo → CANCELAR
+                        _bosFirstDetection.Remove(trade.Id); // Limpiar
+                        _logger.Warning($"[TradeManager][BOS_DEBOUNCE_CANCEL] Trade={trade.Id} Action={trade.Action} Regime={currentRegime} BOS persistió {barsWithBOS} barras → CANCEL");
+                        _logger.Info($"[DIAGNOSTICO][TM] Cancel_BOS Action={trade.Action} Bias={currentBias} Debounce={barsWithBOS}bars");
+                        return true;
+                    }
+                    else
+                    {
+                        // BOS aún no persistió suficiente → NO cancelar
+                        _logger.Info($"[TradeManager][BOS_DEBOUNCE_WAIT] Trade={trade.Id} Action={trade.Action} Regime={currentRegime} BOS={barsWithBOS}/{_config.BOSDebounceBarReq} → Esperando");
+                        return false;
+                    }
+                }
+                else
+                {
+                    // En Normal (o si debounce desactivado): cancelar inmediatamente
+                    _logger.Warning($"[TradeManager] GlobalBias contradictorio: {trade.Action} @ {trade.Entry:F2} | Bias cambió a {currentBias} (Normal, no debounce)");
+                    _logger.Info($"[DIAGNOSTICO][TM] Cancel_BOS Action={trade.Action} Bias={currentBias} Regime={currentRegime}");
+                    return true;
+                }
+            }
+            else
+            {
+                // NO hay BOS contradictorio → Limpiar tracking si existía
+                if (_bosFirstDetection.ContainsKey(trade.Id))
+                {
+                    _bosFirstDetection.Remove(trade.Id);
+                    _logger.Info($"[TradeManager][BOS_DEBOUNCE_CLEAR] Trade={trade.Id} BOS ya no es contradictorio → Limpiado tracking");
+                }
+                return false;
+            }
         }
 
         /// <summary>

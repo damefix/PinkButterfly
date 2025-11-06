@@ -708,6 +708,20 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         public int MinBarsBetweenSameSignal { get; set; } = 12;
         
         /// <summary>
+        /// V6.0i.6: Barras de debounce antes de cancelar por BOS contradictorio
+        /// Confirma que el BOS contradictorio persiste N barras antes de cancelar
+        /// Evita cancelaciones instantáneas sin bloquear el sistema con gracias largas
+        /// Ejemplo: 1 barra @ 15min = 15 minutos de confirmación
+        /// </summary>
+        public int BOSDebounceBarReq { get; set; } = 1;
+        
+        /// <summary>
+        /// V6.0i.6: Si true, el debounce BOS solo se aplica en régimen HighVol
+        /// En Normal, cancelación inmediata (BOS más estable)
+        /// </summary>
+        public bool EnableBOSDebounceInHighVolOnly { get; set; } = true;
+        
+        /// <summary>
         /// Número máximo de operaciones concurrentes permitidas (PENDING + EXECUTED)
         /// V5.7d: Default = 1 (solo una operación activa a la vez)
         /// Gestión de riesgo institucional: evita multiplicar exposición
@@ -983,9 +997,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         
         /// <summary>
         /// Distancia máxima de SL en puntos (régimen HighVol).
-        /// V6.0i: 60 puntos (vs 83 normal) - Estricto
+        /// V6.0i.3b: 70 puntos (vs 83 normal) - Hard cap para evitar desastres pero permite setups sanos
         /// </summary>
-        public double MaxSLDistancePoints_HighVol { get; set; } = 60.0;
+        public double MaxSLDistancePoints_HighVol { get; set; } = 70.0;
         
         /// <summary>
         /// Distancia máxima de SL en ATR (régimen HighVol).
@@ -995,15 +1009,21 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         
         /// <summary>
         /// Distancia máxima de TP en puntos (régimen HighVol).
-        /// V6.0i: 70 puntos (vs 75 normal) - RR ~1.16 con SL=60
+        /// V6.0i.4: 75 puntos (vs 75 normal) - Permite objetivos alcanzables en HighVol
         /// </summary>
-        public double MaxTPDistancePoints_HighVol { get; set; } = 70.0;
+        public double MaxTPDistancePoints_HighVol { get; set; } = 75.0;
         
         /// <summary>
         /// Distancia máxima de TP en ATR (régimen HighVol).
-        /// V6.0i: 9.0 ATRs (vs 10.0 normal)
+        /// V6.0i.4: 10.0 ATRs (igualado a Normal) - Permite objetivos alcanzables en HighVol
         /// </summary>
-        public double MaxTPDistanceATR_HighVol { get; set; } = 9.0;
+        public double MaxTPDistanceATR_HighVol { get; set; } = 10.0;
+        
+        /// <summary>
+        /// Tolerancia porcentual para aceptar candidatos que exceden límites por margen pequeño.
+        /// V6.0i.2: 5% de margen sobre los límites configurados (SL/TP puntos y ATR)
+        /// </summary>
+        public double ValidationTolerancePercent { get; set; } = 0.05;
         
         /// <summary>
         /// Ventana de R:R para TP en régimen HighVol.
@@ -1045,27 +1065,66 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         
         /// <summary>
         /// Confidence mínima para entrada en régimen HighVol.
-        /// V6.0i: 0.65 (vs 0.55 normal) - +0.10 más estricto
+        /// V6.0i.7: 0.77 - Compuerta 2D para filtrar señales de baja calidad
         /// </summary>
-        public double MinConfidenceForEntry_HighVol { get; set; } = 0.65;
+        public double MinConfidenceForEntry_HighVol { get; set; } = 0.77;
+        
+        /// <summary>
+        /// V6.0i.7: Distancia máxima (en ATR60) donde aplica el umbral base de confidence.
+        /// Si DistanceToEntry > este valor, se requiere MinConfidence más estricto.
+        /// </summary>
+        public double HV_StrictDistanceGate_ATR { get; set; } = 0.60;
+        
+        /// <summary>
+        /// V6.0i.7: Confidence mínima requerida para entradas lejanas (> HV_StrictDistanceGate_ATR).
+        /// Entradas lejanas exigen mayor confidence para compensar riesgo de drift.
+        /// </summary>
+        public double HV_StrictDistance_MinConfidence { get; set; } = 0.81;
         
         /// <summary>
         /// Proximity mínima para entrada en régimen HighVol.
-        /// V6.0i: 0.70 (vs 0.60 normal) - +0.10 más estricto
+        /// V6.0i.4: 0.60 (igualado a Normal) - Relajado para aumentar cobertura
         /// </summary>
-        public double MinProximityForEntry_HighVol { get; set; } = 0.70;
+        public double MinProximityForEntry_HighVol { get; set; } = 0.60;
         
         /// <summary>
         /// Distancia máxima al entry en múltiplos de ATR60 (régimen HighVol).
-        /// V6.0i: 0.6 * ATR60 (evitar entradas muy lejanas)
+        /// V6.0i.4: 1.0 * ATR60 - Relajado para aumentar rango de entrada
         /// </summary>
-        public double MaxDistanceToEntry_ATR_HighVol { get; set; } = 0.6;
+        public double MaxDistanceToEntry_ATR_HighVol { get; set; } = 1.0;
+        
+        /// <summary>
+        /// Máximo de barras para que la orden sea ejecutada (régimen Normal).
+        /// V6.0i.5: 24 barras @ 15m = 6 horas
+        /// </summary>
+        public int MaxBarsToFillEntry { get; set; } = 24;
         
         /// <summary>
         /// Máximo de barras para que la orden sea ejecutada (régimen HighVol).
-        /// V6.0i: 32 barras @ 15m = 8 horas (no dejar órdenes vivas mucho tiempo)
+        /// V6.0i.6: 12 barras @ 15m = 3 horas (evitar bloqueo por PENDING largas)
         /// </summary>
-        public int MaxBarsToFillEntry_HighVol { get; set; } = 32;
+        public int MaxBarsToFillEntry_HighVol { get; set; } = 12;
+        
+        /// <summary>
+        /// V6.0i.6: Distancia máxima al entry (en ATR60) antes de cancelar PENDING por staleness (Normal)
+        /// Si la orden se aleja más de este umbral, se cancela automáticamente
+        /// </summary>
+        public double MaxDistanceToEntry_ATR_Cancel { get; set; } = 1.5;
+        
+        /// <summary>
+        /// V6.0i.6b: Distancia máxima al entry (en ATR60) antes de cancelar PENDING por staleness (HighVol)
+        /// OBSOLETO: Reemplazado por curva dinámica en V6.0i.6c
+        /// </summary>
+        public double MaxDistanceToEntry_ATR_Cancel_HighVol { get; set; } = 2.0;
+        
+        // =====================================================================
+        // V6.0i.6c: OBSOLETO - Curva dinámica REVERTIDA (empeoró resultados)
+        // =====================================================================
+        // public double MaxDistATR_Cancel_HV_0to4 { get; set; } = 2.5;
+        // public double MaxDistATR_Cancel_HV_5to8 { get; set; } = 2.0;
+        // public double MaxDistATR_Cancel_HV_9to12 { get; set; } = 1.5;
+        // Resultado: PF 0.93, WR 41.7%, P&L -$145 (peor que V6.0i.6b)
+        // Conclusión: Complejidad inútil, umbral fijo 2.0 ATR es superior
         
         /// <summary>
         /// Threshold de bias compuesto en régimen HighVol.
@@ -1160,9 +1219,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// <summary>
         /// Si true, el TradeManager usará el sesgo del ContextManager (EMA200 1H)
         /// para cancelaciones, en vez del bias de BOS/CHoCH del CoreEngine.
-        /// Unifica criterio entre entrada y cancelación.
+        /// V6.0i.4: false - Desactivado temporalmente porque EMA200@60 está desfasado en HighVol
         /// </summary>
-        public bool UseContextBiasForCancellations { get; set; } = true;
+        public bool UseContextBiasForCancellations { get; set; } = false;
 
         /// <summary>
         /// Barras de gracia antes de cancelar por invalidación estructural (estructura no existe,

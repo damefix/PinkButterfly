@@ -65,7 +65,10 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             // Crear TradeDecision
             TradeDecision decision;
 
-            if (bestZone == null || bestConfidence < _config.MinConfidenceForEntry)
+            // V6.0i.7: Validación de confidence adaptativa (compuerta 2D en HighVol)
+            bool passesConfidence = ValidateConfidenceGate(bestZone, bestConfidence, snapshot, barData, currentBar, timeframeMinutes);
+            
+            if (bestZone == null || !passesConfidence)
             {
                 // No hay zona válida o confidence insuficiente → WAIT
                 decision = CreateWaitDecision(snapshot, bestZone, bestConfidence, breakdown);
@@ -83,6 +86,106 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 "[OutputAdapter] Decisión generada: {0} @ {1:F2}, Confidence: {2:F3}",
                 decision.Action, decision.Entry, decision.Confidence
             ));
+        }
+        
+        /// <summary>
+        /// V6.0i.7: Valida confidence con compuerta 2D en HighVol
+        /// Entradas lejanas (>0.60 ATR) exigen confidence más alto (0.81 vs 0.77)
+        /// </summary>
+        private bool ValidateConfidenceGate(HeatZone zone, double confidence, DecisionSnapshot snapshot, IBarDataProvider barData, int currentBar, int timeframeMinutes)
+        {
+            if (zone == null)
+                return false;
+            
+            // En Normal: usar MinConfidenceForEntry estándar
+            string regime = snapshot.MarketRegime ?? "Normal";
+            if (regime != "HighVol")
+            {
+                if (confidence < _config.MinConfidenceForEntry)
+                {
+                    _logger.Info($"[FILTER][CONF] REJECT Zone={zone.Id} Normal Conf={confidence:F3}<{_config.MinConfidenceForEntry:F3}");
+                    return false;
+                }
+                return true;
+            }
+            
+            // En HighVol: aplicar compuerta 2D
+            try
+            {
+                // Obtener entry de la zona
+                double entry = zone.Metadata.ContainsKey("Entry") ? (double)zone.Metadata["Entry"] : 0.0;
+                if (entry == 0.0)
+                {
+                    // Si no tiene entry calculado, fallback a validación estándar
+                    if (confidence < _config.MinConfidenceForEntry_HighVol)
+                    {
+                        _logger.Info($"[FILTER][CONF_2D] REJECT Zone={zone.Id} HighVol Conf={confidence:F3}<{_config.MinConfidenceForEntry_HighVol:F3} (NoEntry)");
+                        return false;
+                    }
+                    return true;
+                }
+                
+                // Calcular distancia al entry en ATR60
+                DateTime analysisTime = barData.GetBarTime(timeframeMinutes, currentBar);
+                int idx60 = barData.GetBarIndexFromTime(60, analysisTime);
+                
+                if (idx60 < 0)
+                {
+                    // Fallback si no hay datos
+                    if (confidence < _config.MinConfidenceForEntry_HighVol)
+                    {
+                        _logger.Info($"[FILTER][CONF_2D] REJECT Zone={zone.Id} HighVol Conf={confidence:F3}<{_config.MinConfidenceForEntry_HighVol:F3} (NoData)");
+                        return false;
+                    }
+                    return true;
+                }
+                
+                double currentPrice = barData.GetClose(60, idx60);
+                double atr60 = barData.GetATR(60, idx60, 14);
+                
+                if (atr60 <= 0)
+                {
+                    // Fallback si ATR inválido
+                    if (confidence < _config.MinConfidenceForEntry_HighVol)
+                    {
+                        _logger.Info($"[FILTER][CONF_2D] REJECT Zone={zone.Id} HighVol Conf={confidence:F3}<{_config.MinConfidenceForEntry_HighVol:F3} (InvalidATR)");
+                        return false;
+                    }
+                    return true;
+                }
+                
+                double distanceToEntry = Math.Abs(entry - currentPrice);
+                double distanceATR = distanceToEntry / atr60;
+                
+                // Compuerta 2D: si distancia > 0.60 ATR, exigir confidence 0.81; si no, 0.77
+                double requiredConf = (distanceATR > _config.HV_StrictDistanceGate_ATR) 
+                    ? _config.HV_StrictDistance_MinConfidence 
+                    : _config.MinConfidenceForEntry_HighVol;
+                
+                if (confidence < requiredConf)
+                {
+                    _logger.Info($"[FILTER][CONF_2D] REJECT Zone={zone.Id} HighVol Conf={confidence:F3}<{requiredConf:F3} Dist={distanceATR:F2}ATR (Gate={(distanceATR > _config.HV_StrictDistanceGate_ATR ? "STRICT" : "BASE")})");
+                    return false;
+                }
+                else if (confidence < requiredConf + 0.03)
+                {
+                    // Log de señales "cerca del límite" (dentro de 3% del threshold)
+                    _logger.Info($"[FILTER][CONF_2D] ACCEPT_NEAR Zone={zone.Id} HighVol Conf={confidence:F3} (>{requiredConf:F3}) Dist={distanceATR:F2}ATR");
+                }
+                
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.Warning($"[FILTER][CONF_2D] Exception validando Zone={zone.Id}: {ex.Message} → Fallback");
+                // Fallback a validación estándar en caso de error
+                if (confidence < _config.MinConfidenceForEntry_HighVol)
+                {
+                    _logger.Info($"[FILTER][CONF_2D] REJECT Zone={zone.Id} HighVol Conf={confidence:F3}<{_config.MinConfidenceForEntry_HighVol:F3} (Exception)");
+                    return false;
+                }
+                return true;
+            }
         }
 
         /// <summary>

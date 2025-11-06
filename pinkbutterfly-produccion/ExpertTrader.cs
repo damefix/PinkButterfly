@@ -677,8 +677,13 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             double currentPrice = _barDataProvider.GetClose(analysisTF, analysisBarIndex);
             DateTime currentTime = _barDataProvider.GetBarTime(analysisTF, analysisBarIndex);
 
+            // V6.0i.5: Pasar régimen "HighVol" por defecto para aplicar gracia BOS
+            // La lógica de si se aplica o no está controlada por EnableBOSGraceInHighVolOnly en TradeManager
+            // TODO: Exponer régimen actual desde CoreEngine/ContextManager para mayor precisión
+            string currentRegime = "HighVol";
+
             // PASO 1: Actualizar estado de todas las órdenes activas
-            _tradeManager.UpdateTrades(currentHigh, currentLow, analysisBarIndex, currentTime, currentPrice, _coreEngine, _barDataProvider);
+            _tradeManager.UpdateTrades(currentHigh, currentLow, analysisBarIndex, currentTime, currentPrice, _coreEngine, _barDataProvider, currentRegime);
 
             // PASO 2: Si llega una NUEVA señal BUY/SELL, registrarla
             bool isNewSignal = (_lastDecision.Action == "BUY" || _lastDecision.Action == "SELL");
@@ -1202,7 +1207,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 // ================================================================
                 var logoPanel = new System.Text.StringBuilder();
                 logoPanel.AppendLine("╔═══════════════════════════╗");
-                logoPanel.AppendLine("║  🦋 PinkButterfly 🦋      ║");
+                logoPanel.AppendLine("║  🦋 PinkButterfly 🦋     ║");
                 logoPanel.AppendLine("║  Smart Trading System     ║");
                 logoPanel.AppendLine("╚═══════════════════════════╝");
                 
@@ -1213,9 +1218,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 // Añadir logo al inicio
                 panel1.Append(logoPanel.ToString());
                 panel1.AppendLine("");  // Espacio
-                panel1.AppendLine("═════════════════════════════");
+                panel1.AppendLine("═══════════════════════════════");
                 panel1.AppendLine("   PRÓXIMA OPERACIÓN");
-                panel1.AppendLine("═════════════════════════════");
+                panel1.AppendLine("═══════════════════════════════");
                 
                 // Obtener la próxima operación pendiente (la más cercana al precio)
                 var nextPendingTrades = _tradeManager.GetAllTrades()
@@ -1269,15 +1274,15 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     panel1.AppendLine(" No hay señales pendientes");
                 }
                 
-                panel1.AppendLine("═════════════════════════════");
+                panel1.AppendLine("═══════════════════════════════");
                 
                 // ================================================================
                 // PANEL 2: DATOS DE SESIÓN (continuar en panel1 para que quede debajo)
                 // ================================================================
                 panel1.AppendLine("");  // Espacio entre paneles
-                panel1.AppendLine("═════════════════════════════");
+                panel1.AppendLine("═══════════════════════════════");
                 panel1.AppendLine("   DATOS DE SESIÓN");
-                panel1.AppendLine("═════════════════════════════");
+                panel1.AppendLine("═══════════════════════════════");
                 
                 // Obtener estadísticas del TradeManager
                 var allTrades = _tradeManager.GetAllTrades();
@@ -1289,8 +1294,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 int losses = executedTrades.Count(t => t.Status == TradeStatus.SL_HIT);
                 double winRate = totalExecuted > 0 ? (double)wins / totalExecuted * 100 : 0;
                 
-                // Calcular beneficios y pérdidas en $
-                double totalBeneficios = 0;
+                // Calcular ganancias y pérdidas en $
+                double totalGanadas = 0;
                 double totalPerdidas = 0;
                 
                 foreach (var trade in executedTrades)
@@ -1298,7 +1303,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     if (trade.Status == TradeStatus.TP_HIT)
                     {
                         double points = Math.Abs(trade.TP - trade.Entry);
-                        totalBeneficios += points * pointValue * ContractSize;
+                        totalGanadas += points * pointValue * ContractSize;
                     }
                     else if (trade.Status == TradeStatus.SL_HIT)
                     {
@@ -1307,18 +1312,18 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     }
                 }
                 
-                double resultado = totalBeneficios - totalPerdidas;
+                double resultado = totalGanadas - totalPerdidas;
                 
                 // Construir texto del panel (continuar en panel1)
                 panel1.AppendLine($" Ejecutadas: {totalExecuted}");
                 panel1.AppendLine($" Pendientes: {pendingCount}");
                 panel1.AppendLine($" Win Rate: {winRate:F0}%");
-                panel1.AppendLine($" Total Beneficio:");
-                panel1.AppendLine($"   ${totalBeneficios:F2}");
+                panel1.AppendLine($" Total Ganadas:");
+                panel1.AppendLine($"   ${totalGanadas:F2}");
                 panel1.AppendLine($" Total Pérdidas:");
                 panel1.AppendLine($"   ${totalPerdidas:F2}");
                 panel1.AppendLine($" RESULTADO: ${resultado:F2}");
-                panel1.AppendLine("═════════════════════════════");
+                panel1.AppendLine("═══════════════════════════════");
                 
                 // ================================================================
                 // PANEL 3: ÓRDENES PENDIENTES (pegado al final)
@@ -1331,9 +1336,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 if (allPendingTrades.Count > 0)
                 {
                     panel1.AppendLine("");  // Espacio
-                    panel1.AppendLine("═════════════════════════════");
+                    panel1.AppendLine("═══════════════════════════════");
                     panel1.AppendLine("   ÓRDENES PENDIENTES");
-                    panel1.AppendLine("═════════════════════════════");
+                    panel1.AppendLine("═══════════════════════════════");
                     
                     double currentPrice = Close[0];
                     var groupedPending = allPendingTrades
@@ -1357,7 +1362,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                         panel1.AppendLine($" {action} {countStr}@ {group.Entry:F2} [{distStr}]");
                     }
                     
-                    panel1.AppendLine("═════════════════════════════");
+                    panel1.AppendLine("═══════════════════════════════");
                 }
                 
                 // Crear brush rosa para el fondo

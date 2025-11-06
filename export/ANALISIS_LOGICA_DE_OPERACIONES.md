@@ -1,8 +1,8 @@
 # ANÁLISIS LOGICA DE OPERACIONES - PinkButterfly CoreBrain
 
-**Fecha:** 2025-11-05 18:31:31
-**LOG:** `C:\Users\meste\Documents\NinjaTrader 8\PinkButterfly\logs\backtest_20251105_181644.log`
-**CSV:** `C:\Users\meste\Documents\NinjaTrader 8\PinkButterfly\logs\trades_20251105_181644.csv`
+**Fecha:** 2025-11-06 11:15:05
+**LOG:** `C:\Users\meste\Documents\NinjaTrader 8\PinkButterfly\logs\backtest_20251106_110339.log`
+**CSV:** `C:\Users\meste\Documents\NinjaTrader 8\PinkButterfly\logs\trades_20251106_110339.csv`
 
 ---
 
@@ -10,10 +10,10 @@
 
 ### KPIs Principales
 
-- **Operaciones Ejecutadas:** 68
-- **Win Rate:** 0.0% (0/68)
-- **Profit Factor:** 1.66
-- **Avg R:R Planeado:** 49.53
+- **Operaciones Ejecutadas:** 127
+- **Win Rate:** 0.0% (0/127)
+- **Profit Factor:** 1.40
+- **Avg R:R Planeado:** 46.75
 - **R:R Mínimo para Break-Even:** 1.75
 
 ### 🚨 Problemas Críticos Identificados
@@ -24,13 +24,13 @@
 
 2. **LÍMITES SL/TP NO CALIBRADOS PARA INTRADÍA:**
    - SL máximo observado: 100 puntos
-   - TP máximo observado: 93 puntos
+   - TP máximo observado: 96 puntos
    - **120 puntos es swing trading, no intradía** (1.74% del precio)
 
 3. **R:R INSUFICIENTE PARA WR ACTUAL:**
-   - R:R actual: 49.53
+   - R:R actual: 46.75
    - R:R necesario: 1.75
-   - **Gap:** -47.78
+   - **Gap:** -45.00
 
 ---
 
@@ -81,10 +81,10 @@ else: Neutral
 | Paso | Zonas/Señales | % Supervivencia |
 |------|---------------|-----------------|
 | StructureFusion | 0 | 0.0% |
-| ProximityAnalyzer | 18292 | 0.0% |
+| ProximityAnalyzer | 18342 | 0.0% |
 | DFM | 0 | 0.0% |
 | RiskCalculator | 0 | 0.0% |
-| TradeManager | 68 | 0.0% |
+| TradeManager | 127 | 0.0% |
 
 **Análisis:**
 - ⚠️ **No hay datos suficientes para análisis de waterfall**
@@ -93,8 +93,8 @@ else: Neutral
 
 | Tipo TP | Count | % |
 |---------|-------|---|
-| P0_SWING_LITE | 923 | 89.6% |
-| P0_ANY_DIR | 107 | 10.4% |
+| P0_SWING_LITE | 932 | 90.0% |
+| P0_ANY_DIR | 103 | 10.0% |
 
 ---
 
@@ -102,35 +102,35 @@ else: Neutral
 
 ### 4.1 Distribución Stop Loss (Puntos)
 
-- **Media:** 54.93 pts
-- **Mediana:** 58.66 pts
-- **Min/Max:** 1.68 / 99.67 pts
+- **Media:** 45.82 pts
+- **Mediana:** 46.68 pts
+- **Min/Max:** 0.68 / 99.67 pts
 
 **Percentiles:**
 
 | Percentil | Valor (pts) |
 |-----------|-------------|
-| P50 | 58.66 |
-| P70 | 78.96 |
-| P80 | 85.07 |
-| P90 | 95.77 |
-| P95 | 98.67 |
+| P50 | 46.68 |
+| P70 | 65.27 |
+| P80 | 70.67 |
+| P90 | 82.67 |
+| P95 | 86.68 |
 
 ### 4.2 Distribución Take Profit (Puntos)
 
-- **Media:** 58.38 pts
-- **Mediana:** 75.25 pts
-- **Min/Max:** 0.90 / 93.40 pts
+- **Media:** 50.71 pts
+- **Mediana:** 50.35 pts
+- **Min/Max:** 0.13 / 95.51 pts
 
 **Percentiles:**
 
 | Percentil | Valor (pts) |
 |-----------|-------------|
-| P50 | 75.25 |
-| P70 | 75.39 |
-| P80 | 75.48 |
-| P90 | 75.84 |
-| P95 | 87.15 |
+| P50 | 50.35 |
+| P70 | 74.93 |
+| P80 | 75.53 |
+| P90 | 85.54 |
+| P95 | 93.28 |
 
 ### 4.3 Límites Dinámicos Recomendados (Data-Driven)
 
@@ -138,11 +138,11 @@ else: Neutral
 
 ```csharp
 // En EngineConfig.cs
-public int MaxSLDistancePoints { get; set; } = 95; // Era 60
-public int MaxTPDistancePoints { get; set; } = 75; // Era 120
+public int MaxSLDistancePoints { get; set; } = 82; // Era 60
+public int MaxTPDistancePoints { get; set; } = 85; // Era 120
 ```
 
-**Rationale:** Basado en percentil 90 de operaciones reales (SL: 95.8pts, TP: 75.8pts)
+**Rationale:** Basado en percentil 90 de operaciones reales (SL: 82.7pts, TP: 85.5pts)
 
 ### 4.4 R:R Óptimo
 
@@ -154,8 +154,8 @@ R:R_min = (1 - 0.000) / 0.000
 R:R_min = 1.75
 ```
 
-**Estado actual:** R:R promedio = 49.53
-**Gap:** -47.78 (necesitas mejorar R:R)
+**Estado actual:** R:R promedio = 46.75
+**Gap:** -45.00 (necesitas mejorar R:R)
 
 ---
 
@@ -181,8 +181,8 @@ R:R_min = 1.75
 **Problema:** Límites actuales son para swing, no intradía
 
 **Solución:**
-1. **MaxSLDistancePoints:** 60 → **95** (P90 real)
-2. **MaxTPDistancePoints:** 120 → **75** (P90 real)
+1. **MaxSLDistancePoints:** 60 → **82** (P90 real)
+2. **MaxTPDistancePoints:** 120 → **85** (P90 real)
 3. **Límite dinámico por volatilidad:**
    ```
    MaxTPDynamic = min(k * ATR60, MaxTPDistancePoints)
@@ -193,7 +193,7 @@ R:R_min = 1.75
 
 ### Prioridad 3: MEJORAR R:R
 
-**Problema:** R:R actual (49.53) < R:R mínimo (1.75)
+**Problema:** R:R actual (46.75) < R:R mínimo (1.75)
 
 **Solución:**
 1. Aumentar `MinRiskRewardRatio` para fallback P4: 1.0 → **1.5**
@@ -205,4 +205,4 @@ R:R_min = 1.75
 ---
 
 *Análisis generado automáticamente por analizador-logica-operaciones.py*
-*Fecha: 2025-11-05 18:31:31*
+*Fecha: 2025-11-06 11:15:05*
