@@ -160,6 +160,11 @@ def parse_log(log_path: str) -> dict:
         rf"\[(?:{re_diagnostic_tag})\]\[Risk\]\s*TP_CANDIDATE:\s*Idx=(\d+)\s*Priority=(\S+)\s*Type=(\w+)\s*Score=([0-9\.,]+)\s*TF=(\d+)\s*DistATR=([0-9\.,]+)\s*Age=(\d+)\s*Price=([0-9\.,]+)\s*RR=([0-9\.,]+)")
     re_tp_selected = re.compile(
         rf"\[(?:{re_diagnostic_tag})\]\[Risk\]\s*TP_SELECTED:\s*Zone=(\S+)\s*Priority=(\S+)\s*Type=(\w+)\s*Score=([0-9\.,]+)\s*TF=(-?\d+)\s*DistATR=([0-9\.,]+)\s*Age=(\d+)\s*Price=([0-9\.,]+)\s*RR=([0-9\.,]+)\s*Reason=(\S+)")
+    # Compatibilidad: aceptar tanto [TP_PICK] como [RISK][TP_PICK] (formato genérico fuera de [DIAGNOSTICO])
+    re_tp_pick_generic = re.compile(
+        r"\[(?:RISK\]\[)?TP_PICK\]\s*Zone=(\S+).*?Type=(\S+)\s*TF=(-?\d+).*?DistATR=([0-9\.,]+)\s*RR=([0-9\.,]+).*?(?:Score|FinalScore)=([0-9\.,]+).*?Price=([0-9\.,]+)(?:\s*Reason=(\S+))?",
+        re.IGNORECASE
+    )
 
     # StructureFusion diagnostics (nuevo en V5.6.9)
     # Por zona: [DIAGNOSTICO][StructureFusion] HZ=... Triggers=X Anchors=Y BullDir=a BearDir=b → Dir=Z Reason=... Bias=...
@@ -812,14 +817,43 @@ def parse_log(log_path: str) -> dict:
                 if m:
                     stats['tp_analysis']['selected'] += 1
                     stats['tp_analysis']['selected_list'].append({
+                        'zone': m.group(1),
                         'priority': m.group(2),
                         'type': m.group(3),
                         'score': to_float(m.group(4)),
                         'tf': int(m.group(5)),
                         'dist_atr': to_float(m.group(6)),
                         'age': int(m.group(7)),
+                        'price': to_float(m.group(8)),
                         'rr': to_float(m.group(9)),
                         'reason': m.group(10)
+                    })
+                    continue
+
+                # Compatibilidad con [TP_PICK] y [RISK][TP_PICK]
+                m = re_tp_pick_generic.search(line)
+                if m:
+                    zone = m.group(1)
+                    tp_type = m.group(2)
+                    tf = int(m.group(3))
+                    distatr = to_float(m.group(4))
+                    rr = to_float(m.group(5))
+                    score = to_float(m.group(6))
+                    price = to_float(m.group(7))
+                    reason = (m.group(8) or 'TP_PICK') if len(m.groups()) >= 8 else 'TP_PICK'
+                    prio = 'P3' if tp_type.upper().startswith('P3') else ('P0' if tp_type.upper().startswith('P0') else 'NA')
+                    stats['tp_analysis']['selected'] += 1
+                    stats['tp_analysis']['selected_list'].append({
+                        'zone': zone,
+                        'priority': prio,
+                        'type': tp_type,
+                        'score': score,
+                        'tf': tf,
+                        'dist_atr': distatr,
+                        'age': 0,
+                        'price': price,
+                        'rr': rr,
+                        'reason': reason
                     })
                     continue
 
@@ -1000,6 +1034,26 @@ def parse_log(log_path: str) -> dict:
                     continue
     except FileNotFoundError:
         print(f"ERROR: No se encontró el log: {log_path}", file=sys.stderr)
+
+    # Deduplicación de TP seleccionados (evitar doble conteo por [TP_PICK] y [RISK][TP_PICK])
+    try:
+        sel = stats['tp_analysis']['selected_list']
+        deduped = []
+        seen = set()
+        for s in sel:
+            zone = s.get('zone', '')
+            tp_type = s.get('type', '')
+            tf = s.get('tf', -9999)
+            price = s.get('price', 0.0)
+            key = (zone, tp_type, tf, round(price if price is not None else 0.0, 2))
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(s)
+        stats['tp_analysis']['selected_list'] = deduped
+        stats['tp_analysis']['selected'] = len(deduped)
+    except Exception:
+        pass
 
     return stats
 
@@ -1440,7 +1494,6 @@ def render_markdown(log_path: str, csv_path: str, stats_log: dict, stats_csv: di
             lines.append(f"- Muestras: {n} | Aligned={aligned_n} ({aligned_n/n*100:.1f}%)")
             lines.append(f"- Core≈ {avg_core:.2f} | Prox≈ {avg_prox:.2f} | ConfC≈ {avg_confc:.2f} | ConfScore≈ {avg_confscore:.2f} | RR≈ {avg_rr:.2f} | Confidence≈ {avg_conf:.2f}")
             # Distribuciones SL/TP por TF y estructuralidad
-            from collections import Counter
             sl_tf_cnt = Counter(str(d['sl_tf']) for d in detail)
             tp_tf_cnt = Counter(str(d['tp_tf']) for d in detail)
             sl_struct_p = sum(1 for d in detail if d['sl_struct'])/n*100.0
@@ -1647,7 +1700,6 @@ def render_markdown(log_path: str, csv_path: str, stats_log: dict, stats_csv: di
             lines.append(f"- Candidatos por zona (promedio): {sla['total_candidates']/sla['zones']:.1f}")
             
             if sla['candidates']:
-                from collections import Counter
                 # Edad
                 ages_cand = [c['age'] for c in sla['candidates']]
                 ages_sel = [s['age'] for s in sla['selected_list']]
@@ -1684,7 +1736,6 @@ def render_markdown(log_path: str, csv_path: str, stats_log: dict, stats_csv: di
             lines.append(f"- Candidatos por zona (promedio): {tpa['total_candidates']/tpa['zones']:.1f}")
             
             if tpa['candidates']:
-                from collections import Counter
                 # Edad
                 ages_cand = [c['age'] for c in tpa['candidates']]
                 ages_sel = [s['age'] for s in tpa['selected_list']]

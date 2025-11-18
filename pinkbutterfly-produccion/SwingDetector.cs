@@ -151,11 +151,13 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
             if (swingRange < minSwingSize)
             {
-                if (_config.EnableDebug)
-                    _logger.Debug($"SwingDetector: Swing High rechazado por tamaño insuficiente. Range={swingRange:F5}, MinSize={minSwingSize:F5}");
+                // TRAZA DIAGNÓSTICA: Swing High rechazado
+                _logger.Info($"[DIAG][SwingDetector] TF={tfMinutes} Bar={swingIndex} REJECTED_HIGH: swingRange={swingRange:F2} < minSize={minSwingSize:F2} (ATR={atr:F2})");
                 return false;
             }
 
+            // TRAZA DIAGNÓSTICA: Swing High aceptado
+            _logger.Info($"[DIAG][SwingDetector] TF={tfMinutes} Bar={swingIndex} ACCEPTED_HIGH: swingRange={swingRange:F2} >= minSize={minSwingSize:F2}");
             return true;
         }
 
@@ -200,11 +202,13 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
             if (swingRange < minSwingSize)
             {
-                if (_config.EnableDebug)
-                    _logger.Debug($"SwingDetector: Swing Low rechazado por tamaño insuficiente. Range={swingRange:F5}, MinSize={minSwingSize:F5}");
+                // TRAZA DIAGNÓSTICA: Swing Low rechazado
+                _logger.Info($"[DIAG][SwingDetector] TF={tfMinutes} Bar={swingIndex} REJECTED_LOW: swingRange={swingRange:F2} < minSize={minSwingSize:F2} (ATR={atr:F2})");
                 return false;
             }
 
+            // TRAZA DIAGNÓSTICA: Swing Low aceptado
+            _logger.Info($"[DIAG][SwingDetector] TF={tfMinutes} Bar={swingIndex} ACCEPTED_LOW: swingRange={swingRange:F2} >= minSize={minSwingSize:F2}");
             return true;
         }
 
@@ -300,6 +304,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 return;
 
             double currentClose = _provider.GetClose(tfMinutes, barIndex);
+            double currentHigh = _provider.GetHigh(tfMinutes, barIndex);
+            double currentLow = _provider.GetLow(tfMinutes, barIndex);
             
             var activeSwings = _swingCacheByTF[tfMinutes]
                 .Where(s => s.IsActive && !s.IsBroken)
@@ -308,6 +314,36 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
             foreach (var swing in activeSwings)
             {
+                // ============================================================
+                // TOUCH DETECTION (NUEVO)
+                // ============================================================
+                
+                // Detectar si el precio está dentro de la zona del swing
+                bool priceInZone = currentClose >= swing.Low && currentClose <= swing.High;
+                bool wickTouch = (currentHigh >= swing.Low && currentHigh <= swing.High) ||
+                                 (currentLow >= swing.Low && currentLow <= swing.High);
+
+                if (priceInZone)
+                {
+                    swing.TouchCount_Body++;
+                    swing.LastUpdatedBarIndex = barIndex; // ✅ Actualizar actividad reciente
+                    
+                    if (_config.EnableDebug)
+                        _logger.Debug($"SwingDetector: Body touch on {swing.Id} (count={swing.TouchCount_Body})");
+                }
+                else if (wickTouch)
+                {
+                    swing.TouchCount_Wick++;
+                    swing.LastUpdatedBarIndex = barIndex; // ✅ Actualizar actividad reciente
+                    
+                    if (_config.EnableDebug)
+                        _logger.Debug($"SwingDetector: Wick touch on {swing.Id} (count={swing.TouchCount_Wick})");
+                }
+
+                // ============================================================
+                // BREAK DETECTION (EXISTENTE)
+                // ============================================================
+                
                 bool broken = false;
 
                 if (swing.IsHigh)
@@ -335,7 +371,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     // Verificar existencia antes de actualizar
                     if (_engine.GetStructureById(swing.Id) != null)
                     {
-                        _engine.UpdateStructure(swing);
+                        _engine.UpdateStructure(swing, barIndex);
                     }
                     else
                     {

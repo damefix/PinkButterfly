@@ -156,7 +156,7 @@ def analyze_trades_csv(csv_file):
                 
                 # Detectar el tipo de evento por el Action
                 if action == 'REGISTERED':
-                    # Formato REGISTERED (20 campos después del split por comas decimales):
+                    # Formato REGISTERED (20+ campos):
                     # TradeID,Timestamp,Action,Direction,Entry(2),SL(2),TP(2),RiskPoints(2),RewardPoints(2),RR(2),Bar,EntryBarTime,StructureID,Status,ExitReason,ExitBar,ExitBarTime,ExitPrice,PnLPoints,PnLDollars
                     sl = f"{parts[6]},{parts[7]}" if len(parts) > 7 and parts[6] != '-' else '-'
                     tp = f"{parts[8]},{parts[9]}" if len(parts) > 9 and parts[8] != '-' else '-'
@@ -173,6 +173,17 @@ def analyze_trades_csv(csv_file):
                     exit_price = '-'
                     pnl_points = '-'
                     pnl_dollars = '-'
+                    
+                    # Si esta línea REGISTERED tiene SL_HIT o TP_HIT, es una operación cerrada
+                    if status in ['SL_HIT', 'TP_HIT']:
+                        action = 'CLOSED'  # Marcar internamente como CLOSED
+                        exit_reason = 'SL' if status == 'SL_HIT' else 'TP'
+                        # ExitBar, ExitBarTime están en índices más adelante
+                        # PnL está al final de la línea
+                        if len(parts) > 20:
+                            # Buscar los últimos 4 campos (2 para PnLPoints, 2 para PnLDollars)
+                            pnl_points = f"{parts[-4]},{parts[-3]}" if parts[-4] != '-' else '-'
+                            pnl_dollars = f"{parts[-2]},{parts[-1]}" if parts[-2] != '-' else '-'
                     
                 elif action in ['CANCELLED', 'EXPIRED']:
                     # Formato CANCELLED/EXPIRED (20 campos):
@@ -249,53 +260,128 @@ def analyze_trades_csv(csv_file):
     
     print(f"OK Trade IDs unicos: {len(trades_by_id)}\n")
     
-    # Procesar cada trade
+    # Procesar cada trade (CORREGIDO: contar cada CLOSED como operación individual)
     trade_book = []
+    closed_counter = {}
     
     for trade_id, events in trades_by_id.items():
-        # Buscar evento REGISTERED
-        registered = next((e for e in events if e['Action'] == 'REGISTERED'), None)
-        if not registered:
+        # Buscar evento(s) REGISTERED
+        registered_events = [e for e in events if e['Action'] == 'REGISTERED']
+        if not registered_events:
             continue
         
-        # Buscar evento final (CLOSED, CANCELLED, EXPIRED)
-        final = next((e for e in events if e['Action'] in ['CLOSED', 'CANCELLED', 'EXPIRED']), None)
+        # Buscar evento(s) CLOSED (puede haber múltiples)
+        closed_events = [e for e in events if e['Action'] == 'CLOSED']
+        cancelled_events = [e for e in events if e['Action'] == 'CANCELLED']
+        expired_events = [e for e in events if e['Action'] == 'EXPIRED']
         
-        # Construir registro del trade
-        trade = {
-            'trade_id': trade_id,
-            'direction': registered.get('Direction', 'N/A'),
-            'entry': clean_number(registered.get('Entry', '0')),
-            'sl': clean_number(registered.get('SL', '0')),
-            'tp': clean_number(registered.get('TP', '0')),
-            'risk_points': clean_number(registered.get('RiskPoints', '0')),
-            'reward_points': clean_number(registered.get('RewardPoints', '0')),
-            'rr': clean_number(registered.get('RR', '0')),
-            'entry_bar': registered.get('Bar', 'N/A'),
-            'entry_bar_time': registered.get('EntryBarTime', 'N/A'),
-            'structure_id': registered.get('StructureID', 'N/A'),
-            'status': 'PENDING',
-            'exit_reason': 'N/A',
-            'exit_bar': 'N/A',
-            'exit_bar_time': 'N/A',
-            'exit_price': 0.0,
-            'pnl_points': 0.0,
-            'pnl_dollars': 0.0
-        }
+        # Procesar cada operación CERRADA como trade individual
+        if closed_events:
+            for idx, closed in enumerate(closed_events):
+                # Tomar REGISTERED correspondiente (por índice o el primero si hay múltiples)
+                registered = registered_events[min(idx, len(registered_events)-1)]
+                
+                # Generar ID único para duplicados
+                if trade_id not in closed_counter:
+                    closed_counter[trade_id] = 0
+                closed_counter[trade_id] += 1
+                unique_id = f"{trade_id}_{closed_counter[trade_id]}" if closed_counter[trade_id] > 1 else trade_id
+                
+                # Construir registro del trade CERRADO
+                trade = {
+                    'trade_id': unique_id,
+                    'direction': registered.get('Direction', 'N/A'),
+                    'entry': clean_number(registered.get('Entry', '0')),
+                    'sl': clean_number(registered.get('SL', '0')),
+                    'tp': clean_number(registered.get('TP', '0')),
+                    'risk_points': clean_number(registered.get('RiskPoints', '0')),
+                    'reward_points': clean_number(registered.get('RewardPoints', '0')),
+                    'rr': clean_number(registered.get('RR', '0')),
+                    'entry_bar': registered.get('Bar', 'N/A'),
+                    'entry_bar_time': registered.get('EntryBarTime', 'N/A'),
+                    'structure_id': registered.get('StructureID', 'N/A'),
+                    'status': 'CLOSED',
+                    'exit_reason': closed.get('ExitReason', 'N/A'),
+                    'exit_bar': closed.get('ExitBar', 'N/A'),
+                    'exit_bar_time': closed.get('ExitBarTime', 'N/A'),
+                    'exit_price': clean_number(closed.get('ExitPrice', '0')),
+                    'pnl_points': clean_number(closed.get('PnLPoints', '0')),
+                    'pnl_dollars': clean_number(closed.get('PnLDollars', '0'))
+                }
+                trade_book.append(trade)
         
-        if final:
-            # El campo 'Status' en el CSV contiene SL_HIT, CANCELLED, EXPIRED, etc.
-            final_status = final.get('Status', 'N/A')
-            trade['status'] = final_status
-            trade['exit_reason'] = final.get('ExitReason', 'N/A')
-            # ExitBar ya está correctamente parseado en el evento final
-            trade['exit_bar'] = final.get('ExitBar', 'N/A')
-            trade['exit_bar_time'] = final.get('ExitBarTime', 'N/A')
-            trade['exit_price'] = clean_number(final.get('ExitPrice', '0'))
-            trade['pnl_points'] = clean_number(final.get('PnLPoints', '0'))
-            trade['pnl_dollars'] = clean_number(final.get('PnLDollars', '0'))
-        
-        trade_book.append(trade)
+        # Procesar CANCELLED y EXPIRED (solo tomar el primero de cada tipo)
+        if cancelled_events:
+            registered = registered_events[0]
+            trade = {
+                'trade_id': trade_id,
+                'direction': registered.get('Direction', 'N/A'),
+                'entry': clean_number(registered.get('Entry', '0')),
+                'sl': clean_number(registered.get('SL', '0')),
+                'tp': clean_number(registered.get('TP', '0')),
+                'risk_points': clean_number(registered.get('RiskPoints', '0')),
+                'reward_points': clean_number(registered.get('RewardPoints', '0')),
+                'rr': clean_number(registered.get('RR', '0')),
+                'entry_bar': registered.get('Bar', 'N/A'),
+                'entry_bar_time': registered.get('EntryBarTime', 'N/A'),
+                'structure_id': registered.get('StructureID', 'N/A'),
+                'status': 'CANCELLED',
+                'exit_reason': cancelled_events[0].get('ExitReason', 'N/A'),
+                'exit_bar': cancelled_events[0].get('ExitBar', 'N/A'),
+                'exit_bar_time': cancelled_events[0].get('ExitBarTime', 'N/A'),
+                'exit_price': 0.0,
+                'pnl_points': 0.0,
+                'pnl_dollars': 0.0
+            }
+            trade_book.append(trade)
+        elif expired_events:
+            registered = registered_events[0]
+            trade = {
+                'trade_id': trade_id,
+                'direction': registered.get('Direction', 'N/A'),
+                'entry': clean_number(registered.get('Entry', '0')),
+                'sl': clean_number(registered.get('SL', '0')),
+                'tp': clean_number(registered.get('TP', '0')),
+                'risk_points': clean_number(registered.get('RiskPoints', '0')),
+                'reward_points': clean_number(registered.get('RewardPoints', '0')),
+                'rr': clean_number(registered.get('RR', '0')),
+                'entry_bar': registered.get('Bar', 'N/A'),
+                'entry_bar_time': registered.get('EntryBarTime', 'N/A'),
+                'structure_id': registered.get('StructureID', 'N/A'),
+                'status': 'EXPIRED',
+                'exit_reason': expired_events[0].get('ExitReason', 'N/A'),
+                'exit_bar': expired_events[0].get('ExitBar', 'N/A'),
+                'exit_bar_time': expired_events[0].get('ExitBarTime', 'N/A'),
+                'exit_price': 0.0,
+                'pnl_points': 0.0,
+                'pnl_dollars': 0.0
+            }
+            trade_book.append(trade)
+        elif not closed_events:
+            # PENDING (sin evento final)
+            registered = registered_events[0]
+            trade = {
+                'trade_id': trade_id,
+                'direction': registered.get('Direction', 'N/A'),
+                'entry': clean_number(registered.get('Entry', '0')),
+                'sl': clean_number(registered.get('SL', '0')),
+                'tp': clean_number(registered.get('TP', '0')),
+                'risk_points': clean_number(registered.get('RiskPoints', '0')),
+                'reward_points': clean_number(registered.get('RewardPoints', '0')),
+                'rr': clean_number(registered.get('RR', '0')),
+                'entry_bar': registered.get('Bar', 'N/A'),
+                'entry_bar_time': registered.get('EntryBarTime', 'N/A'),
+                'structure_id': registered.get('StructureID', 'N/A'),
+                'status': 'PENDING',
+                'exit_reason': 'N/A',
+                'exit_bar': 'N/A',
+                'exit_bar_time': 'N/A',
+                'exit_price': 0.0,
+                'pnl_points': 0.0,
+                'pnl_dollars': 0.0
+            }
+            trade_book.append(trade)
+    
     
     # Clasificar trades
     closed = [t for t in trade_book if t['status'] in ['SL_HIT', 'TP_HIT', 'CLOSED']]

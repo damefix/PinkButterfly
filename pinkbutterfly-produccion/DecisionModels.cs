@@ -50,6 +50,19 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         public DecisionScoreBreakdown Explainability { get; set; }
         public List<string> SourceStructureIds { get; set; }
         public string DominantStructureId { get; set; } // ID de la estructura dominante (para TradeManager)
+        
+        /// <summary>
+        /// V6.0i.9: Distancia al entry en ATR (desde bestZone.Metadata en RiskCalculator)
+        /// -1.0 si no disponible o ATR inválido (< 14 barras o fallback 1.0)
+        /// </summary>
+        public double DistanceToEntryATR { get; set; } = -1.0;
+        
+        /// <summary>
+        /// V6.0i.9: Distancia al entry en puntos (desde bestZone.Metadata en RiskCalculator)
+        /// Usado como fallback si ATR no válido
+        /// </summary>
+        public double DistanceToEntryPoints { get; set; } = 0.0;
+        
         public DateTime GeneratedAt { get; set; }
 
         public TradeDecision()

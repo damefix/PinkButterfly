@@ -156,6 +156,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 // Crear StructureBreakInfo
                 var breakInfo = new StructureBreakInfo
                 {
+                    Type = breakType,  // V6.0k FIX: Establecer Type para filtro en ContextManager
                     BreakType = breakType,
                     BrokenSwingId = swing.Id,
                     BreakPrice = currentClose,

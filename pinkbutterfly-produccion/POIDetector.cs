@@ -309,7 +309,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 // Notificar al motor del cambio (verificar existencia primero)
                 if (_engine.GetStructureById(poi.Id) != null)
                 {
-                    _engine.UpdateStructure(poi);
+                    _engine.UpdateStructure(poi, barIndex);
                 }
                 else
                 {
@@ -473,7 +473,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     // Verificar existencia antes de actualizar
                     if (_engine.GetStructureById(poi.Id) != null)
                     {
-                        _engine.UpdateStructure(poi);
+                        _engine.UpdateStructure(poi, barIndex);
                     }
                     
                     poisToRemove.Add(poi);
@@ -496,7 +496,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     // Verificar existencia antes de actualizar
                     if (_engine.GetStructureById(poi.Id) != null)
                     {
-                        _engine.UpdateStructure(poi);
+                        _engine.UpdateStructure(poi, barIndex);
                     }
                 }
             }

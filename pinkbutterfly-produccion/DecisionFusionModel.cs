@@ -122,6 +122,74 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 // Almacenar breakdown en Metadata
                 zone.Metadata["ConfidenceBreakdown"] = breakdown;
                 zone.Metadata["FinalConfidence"] = breakdown.FinalConfidence;
+                
+                // ========================================================================
+                // CONFIDENCE ADAPTATIVO POR DISTANCIA (FASE 1 - Sistema Inteligente)
+                // ========================================================================
+                bool passesAdaptiveConf = true;
+                double adaptiveMinConf = _config.MinConfidenceForEntry;
+                double distanceATR = 0.0;
+                double confMultiplier = 1.0;
+                string distCategory = "UNKNOWN";
+                
+                if (_config.EnableAdaptiveConfidenceByDistance)
+                {
+                    // Obtener distancia desde metadata (calculada por ProximityAnalyzer)
+                    if (zone.Metadata.ContainsKey("DistanceATR"))
+                    {
+                        distanceATR = (double)zone.Metadata["DistanceATR"];
+                    }
+                    else
+                    {
+                        // Fallback: recalcular si no existe en metadata
+                        try
+                        {
+                            int lastIdxDec = barData.GetCurrentBarIndex(timeframeMinutes);
+                            DateTime analysisTime = barData.GetBarTime(timeframeMinutes, lastIdxDec);
+                            int idx = barData.GetBarIndexFromTime(zone.TFDominante, analysisTime);
+                            double currentPrice = idx >= 0 ? barData.GetClose(zone.TFDominante, idx) : 0.0;
+                            double atr = idx >= 0 ? barData.GetATR(zone.TFDominante, 14, idx) : 0.0;
+                            double distancePts = currentPrice > 0 ? Math.Abs(zone.CenterPrice - currentPrice) : 0.0;
+                            distanceATR = atr > 0 ? distancePts / atr : 0.0;
+                        }
+                        catch
+                        {
+                            distanceATR = 0.0; // Si falla, asumir 0 (muy cerca)
+                        }
+                    }
+                    
+                    // Calcular multiplicador usando función continua
+                    // multiplier = clamp(MaxMultiplier - Slope * distanceATR, 1.0, MaxMultiplier)
+                    confMultiplier = _config.AdaptiveConf_MaxMultiplier - (_config.AdaptiveConf_Slope * distanceATR);
+                    confMultiplier = Math.Max(1.0, Math.Min(_config.AdaptiveConf_MaxMultiplier, confMultiplier));
+                    
+                    // Determinar categoría para logging
+                    if (distanceATR < 2.0) distCategory = "VERY_CLOSE";
+                    else if (distanceATR < 3.0) distCategory = "CLOSE";
+                    else if (distanceATR < 5.0) distCategory = "MEDIUM";
+                    else distCategory = "FAR";
+                    
+                    // Aplicar threshold adaptativo con piso absoluto
+                    adaptiveMinConf = Math.Max(_config.AdaptiveConf_AbsoluteFloor, _config.MinConfidenceForEntry * confMultiplier);
+                    passesAdaptiveConf = breakdown.FinalConfidence >= adaptiveMinConf;
+                    
+                    // Logging detallado para trazabilidad
+                    _logger.Info(string.Format(
+                        "[DIAGNOSTICO][DFM][AdaptiveConf] Zone={0} DistATR={1:F2} ({2}) Conf={3:F3} Base={4:F2} Mult={5:F2} Req={6:F3} Decision={7}",
+                        zone.Id, distanceATR, distCategory, breakdown.FinalConfidence, 
+                        _config.MinConfidenceForEntry, confMultiplier, adaptiveMinConf, 
+                        passesAdaptiveConf ? "PASS" : "SKIP"));
+                    
+                    // Si no pasa, marcar como rechazada para diagnóstico
+                    if (!passesAdaptiveConf)
+                    {
+                        zone.Metadata["DFM_Rejected"] = true;
+                        zone.Metadata["DFM_RejectReason"] = string.Format(
+                            "AdaptiveConf({0:F3}<{1:F3} @{2:F2}ATR)", 
+                            breakdown.FinalConfidence, adaptiveMinConf, distanceATR);
+                        continue; // Saltar esta zona
+                    }
+                }
 
                 // Diagnóstico de proximidad operativo (muestreo) → al log (no a output)
                 _proxDiagCounter++;
@@ -130,7 +198,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 {
                     try
                     {
-                        DateTime analysisTime = barData.GetBarTime(timeframeMinutes, currentBar);
+                        int lastIdxDec = barData.GetCurrentBarIndex(timeframeMinutes);
+                        DateTime analysisTime = barData.GetBarTime(timeframeMinutes, lastIdxDec);
                         int idx = barData.GetBarIndexFromTime(zone.TFDominante, analysisTime);
                         double cur = idx >= 0 ? barData.GetClose(zone.TFDominante, idx) : 0.0;
                         double atr = idx >= 0 ? barData.GetATR(zone.TFDominante, 14, idx) : 0.0;
@@ -150,7 +219,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 {
                     try
                     {
-                        DateTime analysisTime = barData.GetBarTime(timeframeMinutes, currentBar);
+                        int lastIdxDec2 = barData.GetCurrentBarIndex(timeframeMinutes);
+                        DateTime analysisTime = barData.GetBarTime(timeframeMinutes, lastIdxDec2);
                         int idx = barData.GetBarIndexFromTime(zone.TFDominante, analysisTime);
                         double cur = idx >= 0 ? barData.GetClose(zone.TFDominante, idx) : 0.0;
                         double atr = idx >= 0 ? barData.GetATR(zone.TFDominante, 14, idx) : 0.0;
@@ -181,8 +251,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 }
             }
 
-            // Enforce Directional Policy (gating antes de decidir)
-            if (_config.EnforceDirectionalPolicy && bestZone != null && snapshot.GlobalBias != "Neutral" && snapshot.GlobalBiasStrength >= 0.7)
+            // Enforce Directional Policy (gating “light”: aplica solo si GlobalBiasStrength ≥ 0.80)
+            if (_config.EnforceDirectionalPolicy && bestZone != null && snapshot.GlobalBias != "Neutral" && snapshot.GlobalBiasStrength >= 0.80)
             {
                 bool isCounterBias = bestZone.Direction != snapshot.GlobalBias;
                 if (isCounterBias)
@@ -192,9 +262,19 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     double rr = bestZone.Metadata.ContainsKey("ActualRR") ? (double)bestZone.Metadata["ActualRR"] : 0.0;
                     if (bestConfidence < minConf || rr < _config.CounterBiasMinRR)
                     {
+                        // ✅ Loguear señal rechazada con Entry/SL/TP para análisis MFE/MAE
+                        double entry = bestZone.Metadata.ContainsKey("Entry") ? (double)bestZone.Metadata["Entry"] : bestZone.CenterPrice;
+                        double sl = bestZone.Metadata.ContainsKey("SL") ? (double)bestZone.Metadata["SL"] : 0.0;
+                        double tp = bestZone.Metadata.ContainsKey("TP") ? (double)bestZone.Metadata["TP"] : 0.0;
+                        
                         _logger.Info(string.Format(
                             "[DecisionFusionModel] Policy: CONTRA-BIAS descartada. Conf={0:F3}(<{1:F3}) o R:R={2:F2}(<{3:F2})",
                             bestConfidence, minConf, rr, _config.CounterBiasMinRR));
+                        
+                        _logger.Info(string.Format(
+                            "[DFM][REJECTED] Zone={0} Dir={1} Entry={2:F2} SL={3:F2} TP={4:F2} Reason=CONTRA-BIAS Conf={5:F3} RR={6:F2} BiasVs={7}",
+                            bestZone.Id, bestZone.Direction, entry, sl, tp, bestConfidence, rr, snapshot.GlobalBias));
+                        
                         // Forzar WAIT
                         bestZone = null;
                         bestConfidence = 0.0;
@@ -264,7 +344,11 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             breakdown.TypeContribution = (typeMultiplier / 1.5) * _config.Weight_Type; // Normalizar por max (1.5 = OB)
 
             // 5. BiasContribution: Alineamiento con el bias global
+            _logger.Debug(string.Format("[DFM][BIAS_DEBUG] Zone={0} Dir={1} GlobalBias={2} Strength={3:F2}",
+                zone.Id, zone.Direction, snapshot.GlobalBias, snapshot.GlobalBiasStrength));
             double biasAlignment = CalculateBiasAlignment(zone.Direction, snapshot.GlobalBias, snapshot.GlobalBiasStrength);
+            _logger.Debug(string.Format("[DFM][BIAS_DEBUG] BiasAlignment={0:F2} × Weight={1:F2} = {2:F2}",
+                biasAlignment, _config.Weight_Bias, biasAlignment * _config.Weight_Bias));
             breakdown.BiasContribution = biasAlignment * _config.Weight_Bias;
 
             // 6. MomentumContribution: Momentum reciente (basado en BOS/CHoCH)
@@ -284,6 +368,21 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                                  + breakdown.MomentumContribution
                                  + breakdown.VolumeContribution;
 
+            // Penalización suave por edad del ENTRY (si viene de RiskCalculator)
+            double agePenalty = 1.0;
+            try
+            {
+                if (zone.Metadata != null && zone.Metadata.ContainsKey("EntryAgePenalty"))
+                {
+                    agePenalty = (double)zone.Metadata["EntryAgePenalty"];
+                    agePenalty = Math.Max(0.0, Math.Min(1.0, agePenalty));
+                    if (agePenalty < 1.0)
+                        _logger.Debug(string.Format("[DFM][AGE_PENALTY] Zone={0} Applying EntryAgePenalty={1:F2}", zone.Id, agePenalty));
+                }
+            }
+            catch { }
+            rawConfidence *= agePenalty;
+
             // 9. Aplicar penalización si va contra el bias global
             if (zone.Direction != snapshot.GlobalBias && snapshot.GlobalBias != "Neutral")
             {
@@ -292,6 +391,23 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     "[DecisionFusionModel] HeatZone {0} va contra el bias global ({1} vs {2}), aplicando penalización: {3:F3} -> {4:F3}",
                     zone.Id, zone.Direction, snapshot.GlobalBias, rawConfidence / _config.BiasOverrideConfidenceFactor, rawConfidence
                 ));
+            }
+
+            // 9.1 Penalización “bias rápido” (momentum local) - solo penaliza (no filtra)
+            if (_config.EnableQuickBiasPenalty)
+            {
+                string quickBias = momentumFactor >= _config.QuickBiasMomentumBullThreshold
+                    ? "Bullish"
+                    : (momentumFactor <= _config.QuickBiasMomentumBearThreshold ? "Bearish" : "Neutral");
+
+                if (quickBias != "Neutral" && zone.Direction != quickBias)
+                {
+                    double before = rawConfidence;
+                    rawConfidence *= _config.QuickBiasPenaltyFactor;
+                    _logger.Debug(string.Format(
+                        "[DecisionFusionModel] QuickBias contra (Zone={0}, QuickBias={1}, mf={2:F2}) → penalización: {3:F3} -> {4:F3}",
+                        zone.Id, quickBias, momentumFactor, before, rawConfidence));
+                }
             }
 
             // 10. Clamp a [0.0, 1.0]
@@ -312,8 +428,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
             if (zoneDirection == globalBias)
             {
-                // V5.6.2: Cap de seguridad para evitar sobre-dominancia del Bias
-                return Math.Min(1.0, globalBiasStrength * _config.BiasAlignmentBoostFactor);
+                // Usar la fuerza del bias directamente (cap a 1.0). Evita anular con BoostFactor=0.0.
+                return Math.Min(1.0, Math.Max(0.0, globalBiasStrength));
             }
 
             return 0.0; // Contra el bias (penalización total)

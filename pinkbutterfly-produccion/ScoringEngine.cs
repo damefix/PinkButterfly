@@ -160,25 +160,37 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 // ============================================================
                 // 9. FILL HANDLING
                 // ============================================================
+                bool wasFilled = false;
                 if (structure is FVGInfo fvg)
                 {
                     if (fvg.FillPercentage >= _config.FillThreshold)
                     {
                         // Estructura filled: aplicar residual score mínimo
+                        double oldRaw = rawScore;
                         rawScore = Math.Max(rawScore, _config.ResidualScore);
+                        wasFilled = true;
+                        
+                        if (_config.EnablePerfDiagnostics && rawScore != oldRaw)
+                            _logger.Debug($"[SCORE][FILL] Type={structure.Type} TF={structure.TF} RawBefore={oldRaw:F3} RawAfter={rawScore:F3} (ResidualScore applied)");
                     }
                 }
 
                 // ============================================================
                 // 10. BROKEN SWING HANDLING (Swings rotos)
                 // ============================================================
+                bool wasBroken = false;
                 if (structure is SwingInfo swing)
                 {
                     if (swing.IsBroken)
                     {
                         // Swing roto: penalización drástica (10% del score original)
                         // Los swings rotos pierden relevancia pero mantienen valor histórico
+                        double oldRaw = rawScore;
                         rawScore *= 0.10;
+                        wasBroken = true;
+                        
+                        if (_config.EnablePerfDiagnostics)
+                            _logger.Debug($"[SCORE][BROKEN] Type={structure.Type} TF={structure.TF} RawBefore={oldRaw:F3} RawAfter={rawScore:F3} (Broken penalty 0.10x)");
                     }
                 }
 
@@ -211,12 +223,26 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 // Clamp final
                 finalScore = Math.Max(0.0, Math.Min(1.0, finalScore));
 
+                // ============================================================
+                // DIAGNÓSTICO: Logging detallado para scores en el rango problemático (0.20-0.35)
+                // ============================================================
+                if (_config.EnablePerfDiagnostics && finalScore >= 0.20 && finalScore <= 0.35)
+                {
+                    _logger.Info($"[SCORE][BREAKDOWN] Type={structure.Type} TF={structure.TF} Age={ageBars}bars FinalScore={finalScore:F3}");
+                    _logger.Info($"  └─ Components: TFNorm={tfNorm:F3} Fresh={freshness:F3} Prox={proximity:F3} TypeN={typeNorm:F3} Touch={touchFactor:F2} Confl={confluence:F2} Moment={momentumMultiplier:F2}");
+                    _logger.Info($"  └─ Raw={rawScore:F3} Decay={decay:F3} DeltaBars={deltaBarsSinceUpdate} Filled={wasFilled} Broken={wasBroken}");
+                }
+
                 // Fuerza de proximidad extrema para FVG (garantizar score muy bajo si distancia supera el umbral de proximidad)
                 if (structure is FVGInfo fvgProx && _config.EnableProximityHardCut)
                 {
                     if (proxMaxTicks > 0 && distanceTicks >= proxMaxTicks)
                     {
+                        double oldScore = finalScore;
                         finalScore = Math.Min(finalScore, 0.03);
+                        
+                        if (_config.EnablePerfDiagnostics && oldScore != finalScore)
+                            _logger.Debug($"[SCORE][PROX_CUT] Type={structure.Type} TF={structure.TF} ScoreBefore={oldScore:F3} ScoreAfter={finalScore:F3} (Hard proximity cut)");
                     }
                 }
 

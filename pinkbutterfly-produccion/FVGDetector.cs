@@ -95,7 +95,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 double gapSize = lowA - highC;
                 if (IsValidFVGSize(gapSize, atr, tickSize))
                 {
+                    _logger.Info($"[DIAG][FVGDetector] TF={tfMinutes} Bar={barIndex} ACCEPTED_BULLISH: gapSize={gapSize:F2} >= minSize={Math.Max(_config.MinFVGSizeTicks * tickSize, _config.MinFVGSizeATRfactor * atr):F2}");
                     CreateFVG(tfMinutes, barIndex, "Bullish", highC, lowA, idxA, idxB, idxC);
+                }
+                else
+                {
+                    _logger.Info($"[DIAG][FVGDetector] TF={tfMinutes} Bar={barIndex} REJECTED_BULLISH: gapSize={gapSize:F2} < minSize={Math.Max(_config.MinFVGSizeTicks * tickSize, _config.MinFVGSizeATRfactor * atr):F2} (ATR={atr:F2})");
                 }
             }
 
@@ -107,7 +112,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 double gapSize = lowC - highA;
                 if (IsValidFVGSize(gapSize, atr, tickSize))
                 {
+                    _logger.Info($"[DIAG][FVGDetector] TF={tfMinutes} Bar={barIndex} ACCEPTED_BEARISH: gapSize={gapSize:F2} >= minSize={Math.Max(_config.MinFVGSizeTicks * tickSize, _config.MinFVGSizeATRfactor * atr):F2}");
                     CreateFVG(tfMinutes, barIndex, "Bearish", highA, lowC, idxA, idxB, idxC);
+                }
+                else
+                {
+                    _logger.Info($"[DIAG][FVGDetector] TF={tfMinutes} Bar={barIndex} REJECTED_BEARISH: gapSize={gapSize:F2} < minSize={Math.Max(_config.MinFVGSizeTicks * tickSize, _config.MinFVGSizeATRfactor * atr):F2} (ATR={atr:F2})");
                 }
             }
         }
@@ -168,7 +178,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 if (merged != null)
                 {
                     // Se mergeó con uno existente, actualizar en engine
-                    _engine.UpdateStructure(merged);
+                    _engine.UpdateStructure(merged, barIndex);
                     
                     if (_config.EnableDebug)
                         _logger.Debug($"FVGDetector: Merged FVG {fvg.Direction} TF{tfMinutes} into {merged.Id}");
@@ -203,7 +213,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 {
                     var scorer = new ScoringEngine(_config, _provider, _logger);
                     fvg.Score = scorer.CalculateScore(fvg, barIndex, _engine.CurrentMarketBias, confluenceCount: 1);
-                    _engine.UpdateStructure(fvg);
+                    _engine.UpdateStructure(fvg, barIndex);
                 }
                 catch { /* evitar romper flujo en creación */ }
             }
@@ -321,6 +331,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 {
                     fvg.TouchCount_Body++;
                     fvg.TouchedRecently = true;
+                    fvg.LastUpdatedBarIndex = barIndex; // ✅ Actualizar actividad reciente
                     updated = true;
 
                     if (_config.EnableDebug)
@@ -332,6 +343,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 {
                     fvg.TouchCount_Wick++;
                     fvg.TouchedRecently = true;
+                    fvg.LastUpdatedBarIndex = barIndex; // ✅ Actualizar actividad reciente
                     updated = true;
 
                     if (_config.EnableDebug)
@@ -372,7 +384,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     // (puede haber sido purgada por el sistema de purga inteligente)
                     if (_engine.GetStructureById(fvg.Id) != null)
                     {
-                        _engine.UpdateStructure(fvg);
+                        _engine.UpdateStructure(fvg, barIndex);
                     }
                 else
                 {

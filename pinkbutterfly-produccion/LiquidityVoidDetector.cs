@@ -413,7 +413,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     // Verificar existencia antes de actualizar
                     if (_engine.GetStructureById(existingVoid.Id) != null)
                     {
-                        _engine.UpdateStructure(existingVoid);
+                        _engine.UpdateStructure(existingVoid, newVoid.CreatedAtBarIndex);
                     }
                     
                     return existingVoid;
@@ -449,10 +449,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 if (bodyTouch)
                 {
                     voidInfo.TouchCount_Body++;
+                    voidInfo.LastUpdatedBarIndex = barIndex; // ✅ Actualizar actividad reciente
                 }
                 else if (wickTouch)
                 {
                     voidInfo.TouchCount_Wick++;
+                    voidInfo.LastUpdatedBarIndex = barIndex; // ✅ Actualizar actividad reciente
                 }
 
                 // Calcular fill percentage
@@ -490,7 +492,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 // Verificar existencia antes de actualizar
                 if (_engine.GetStructureById(voidInfo.Id) != null)
                 {
-                    _engine.UpdateStructure(voidInfo);
+                    _engine.UpdateStructure(voidInfo, barIndex);
                 }
                 else
                 {
