@@ -1,0 +1,170 @@
+# Informe Diagnóstico de Logs - 2025-11-07 11:36:08
+
+- Log: `..\..\NinjaTrader 8\PinkButterfly\logs\backtest_20251107_104857.log`
+- CSV: `..\..\NinjaTrader 8\PinkButterfly\logs\trades_20251107_104857.csv`
+
+## DFM
+- Eventos de evaluación: 184
+- Evaluaciones Bull: 278 | Bear: 0
+- Pasaron umbral (PassedThreshold): 181
+- ConfidenceBins acumulado: 0:0, 1:0, 2:0, 3:1, 4:22, 5:48, 6:99, 7:43, 8:65, 9:0
+
+### DFM - Contribuciones promedio (desde logs)
+- Sin muestras de desglose de componentes en el log.
+
+## Proximity
+- Eventos: 1186
+- KeptAligned: 96/269 | KeptCounter: 482/2876
+- Promedios reportados (media de promedios por evento):
+  - AvgProxAligned≈ 0.011 | AvgProxCounter≈ 0.088
+  - AvgDistATRAligned≈ 0.21 | AvgDistATRCounter≈ 0.39
+- PreferAligned eventos: 38 | Filtradas contra-bias: 0
+
+### Proximity (Pre-PreferAligned)
+- Eventos: 1186
+- Aligned pre: 96/578 | Counter pre: 482/578
+- AvgProxAligned(pre)≈ 0.011 | AvgDistATRAligned(pre)≈ 0.21
+
+### Proximity Drivers
+- Eventos: 1186
+- Alineadas: n=96 | BaseProx≈ 0.361 | ZoneATR≈ 5.58 | SizePenalty≈ 0.971 | FinalProx≈ 0.351
+- Contra-bias: n=482 | BaseProx≈ 0.556 | ZoneATR≈ 5.57 | SizePenalty≈ 0.972 | FinalProx≈ 0.540
+
+## Risk
+- Eventos: 237
+- Accepted=278 | RejSL=0 | RejTP=74 | RejRR=0 | RejEntry=0
+### TP Policy (V6.0c)
+- **FORCED_P3:** 269 (48.6%)
+- **P4_FALLBACK:** 285 (51.4%)
+- **FORCED_P3 por TF:**
+  - TF5: 4 (1.5%)
+  - TF60: 81 (30.1%)
+  - TF240: 184 (68.4%)
+
+### TP P0 HeatZone-Based (V6.0f-FASE2)
+- **P0_SWING_LITE:** 24 (4.2% del total)
+  - Avg Score: 0.76 | Avg R:R: 2.31 | Avg DistATR: 6.53
+  - Por TF: TF60=24
+
+
+### WR vs SLDistATR (aceptaciones)
+- Matched aceptaciones con CSV: 88 | Unmatched: 190
+- 0-10: Wins=66 Losses=22 WR=75.0% (n=88)
+- 10-15: Wins=0 Losses=0 WR=0.0% (n=0)
+- 15-20: Wins=0 Losses=0 WR=0.0% (n=0)
+- 20-25: Wins=0 Losses=0 WR=0.0% (n=0)
+- 25+: Wins=0 Losses=0 WR=0.0% (n=0)
+
+### WR vs Confidence (aceptaciones)
+- 0.50-0.60: Wins=66 Losses=22 WR=75.0% (n=88)
+- 0.60-0.70: Wins=0 Losses=0 WR=0.0% (n=0)
+- 0.70-0.80: Wins=0 Losses=0 WR=0.0% (n=0)
+- 0.80-0.90: Wins=0 Losses=0 WR=0.0% (n=0)
+- 0.90-1.00: Wins=0 Losses=0 WR=0.0% (n=0)
+
+### Análisis de Calidad de Zonas Aceptadas
+- Muestras: 278 | Aligned=50 (18.0%)
+- Core≈ 1.00 | Prox≈ 0.58 | ConfC≈ 0.00 | ConfScore≈ 0.00 | RR≈ 1.51 | Confidence≈ 0.00
+- SL_TF dist: {'-1': 278} | SL_Structural≈ 0.0%
+- TP_TF dist: {'240': 101, '60': 102, '-1': 71, '5': 4} | TP_Structural≈ 74.5%
+
+### SLPick por Bandas y TF
+- Bandas: lt8=256, 8-10=22, 10-12.5=0, 12.5-15=0, >15=0
+- TF: 5m=0, 15m=0, 60m=0, 240m=0, 1440m=0
+- RR plan por bandas: 0-10≈ 1.51 (n=278), 10-15≈ 0.00 (n=0)
+
+## CancelBias (EMA200@60m)
+- Eventos: 0
+- Distribución Bias: {'Bullish': 0, 'Bearish': 0, 'Neutral': 0}
+
+## StructureFusion
+- Trazas por zona: 150435 | Zonas con Anchors: 150435
+- Dir zonas (zona): Bull=150435 Bear=0 Neutral=0
+- Resumen por ciclo (promedios): TotHZ≈ 0.1, WithAnchors≈ 0.1, DirBull≈ 0.1, DirBear≈ 0.0, DirNeutral≈ 0.0
+- Razones de dirección: {'anchors+triggers': 150435}
+- TF Triggers: {'5': 3145}
+- TF Anchors: {'60': 3145, '240': 3145, '1440': 2308}
+
+## ContextManager Bias
+- Eventos: 0 | Distribución: {'Bullish': 0, 'Bearish': 0, 'Neutral': 0}
+
+### Context (Diagnóstico)
+- Eventos: 0 | Distribución: {'Bullish': 0, 'Bearish': 0, 'Neutral': 0}
+
+## TradeManager - Razones (desde log)
+- Expiraciones: {'score decayó a 0,30': 2}
+
+## CSV de Trades
+- Filas: 32 | Ejecutadas: 6 | Canceladas: 0 | Expiradas: 0
+- BUY: 38 | SELL: 0
+
+## 📊 Embudo de Señales (Funnel)
+- DFM Señales (PassedThreshold): 181
+- Registered: 16
+  - DEDUP_COOLDOWN: 12 | DEDUP_IDENTICAL: 4 | SKIP_CONCURRENCY: 38
+- Intentos de registro: 70
+
+### TRADE DEDUP - Zonas y Persistencia
+- Top 10 Zonas más deduplicadas (IDENTICAL):
+
+| ZoneID | Duplicados | % del Total | Key Típica |
+|--------|------------:|------------:|-----------:|
+| d9ffd33e-a65b-4f03-997b-0c26a21cbfac | 3 | 75.0% | 6141,50/6114,86/6194,25 |
+| dc3ebc2f-36be-4c54-9596-bde5669047ab | 1 | 25.0% | 6139,50/6111,59/6203,00 |
+
+- Distribución de DeltaBars (IDENTICAL):
+
+| DeltaBars | Cantidad | % |
+|-----------|---------:|---:|
+| 0 | 0 | 0.0% |
+| 1 | 0 | 0.0% |
+| 2-5 | 4 | 100.0% |
+| 6-12 | 0 | 0.0% |
+| >12 | 0 | 0.0% |
+
+- IDENTICAL por Acción: {'BUY': 4, 'SELL': 0}
+- IDENTICAL por DomTF: {'60': 4}
+- COOLDOWN por Zona (top 5): {'3c3f4980-172f-464c-b6c7-ba411da820e4': 6, 'caa759be-cae0-4971-8e0f-d590c87a58e0': 4, '161f6c76-c930-4231-b341-3367bfdf7b52': 1, 'dc3ebc2f-36be-4c54-9596-bde5669047ab': 1}
+
+### Ratios del Funnel
+- Coverage = Intentos / PassedThreshold = 38.7%
+- RegRate = Registered / Intentos = 22.9%
+- Dedup Rate = (COOLDOWN+IDENTICAL) / Intentos = 22.9%
+- Concurrency = SKIP_CONCURRENCY / Intentos = 54.3%
+- ExecRate = Ejecutadas / Registered = 37.5%
+
+## Análisis Post-Mortem: SL/TP
+### Stop Loss (SL)
+- Zonas analizadas: 1 | Total candidatos: 24 | Seleccionados: 1
+- Candidatos por zona (promedio): 24.0
+- **Edad (barras)** - Candidatos: med=76, max=312 | Seleccionados: med=76, max=76
+- **Score** - Candidatos: avg=0.48 | Seleccionados: avg=0.28
+- **TF Candidatos**: {60: 12, 5: 7, 240: 5}
+- **TF Seleccionados**: {60: 1}
+- **DistATR** - Candidatos: avg=8.2 | Seleccionados: avg=11.8
+- **Razones de selección**: {'InBand[8,15]_TFPreference': 1}
+- **En banda [10,15] ATR**: 12/24 (50.0%)
+
+### Take Profit (TP)
+- Zonas analizadas: 554 | Total candidatos: 8292 | Seleccionados: 554
+- Candidatos por zona (promedio): 15.0
+- **Edad (barras)** - Candidatos: med=740, max=40567 | Seleccionados: med=0, max=38190
+- **Score** - Candidatos: avg=0.52 | Seleccionados: avg=0.28
+- **Priority Candidatos**: {'P3': 8292}
+- **Priority Seleccionados**: {'P4_Fallback': 285, 'P3': 269}
+- **Type Candidatos**: {'Swing': 8292}
+- **Type Seleccionados**: {'Calculated': 285, 'Swing': 269}
+- **TF Candidatos**: {240: 3715, 5: 2199, 60: 1824, 1440: 554}
+- **TF Seleccionados**: {-1: 285, 240: 184, 60: 81, 5: 4}
+- **DistATR** - Candidatos: avg=7.4 | Seleccionados: avg=7.9
+- **RR** - Candidatos: avg=1.67 | Seleccionados: avg=1.29
+- **Razones de selección**: {'NoStructuralTarget': 285, 'SwingP3_TF>=60_RR>=1.0_Dist>=6': 122, 'SwingP3_TF>=60_RR>=1.0_Dist>=6_NextCandidate_1of8': 38, 'SwingP3_TF>=60_RR>=1.0_Dist>=6_NextCandidate_1of6': 19, 'SwingP3_TF>=60_RR>=1.0_Dist>=6_NextCandidate_1of5': 5, 'SwingP3_TF>=60_RR>=1.0_Dist>=6_NextCandidate_1of10': 15, 'SwingP3_TF>=60_RR>=1.0_Dist>=6_NextCandidate_1of7': 19, 'SwingP3_TF>=60_RR>=1.0_Dist>=6_NextCandidate_1of13': 18, 'SwingP3_TF>=60_RR>=1.0_Dist>=6_NextCandidate_1of4': 19, 'SwingP3_ANYTF_RR>=1.0_Dist>=6_NextCandidate_1of3': 3, 'SwingP3_TF>=60_RR>=1.0_Dist>=6_NextCandidate_1of12': 6, 'SwingP3_TF>=60_RR>=1.0_Dist>=6_NextCandidate_1of14': 4, 'SwingP3_ANYTF_RR>=1.0_Dist>=6_NextCandidate_1of2': 1}
+
+### 🎯 Recomendaciones
+- ⚠️ SL: Estructuras muy antiguas (max 38190 barras). Considerar filtro de edad máxima.
+- ⚠️ TP: Estructuras muy antiguas (max 38190 barras). Considerar filtro de edad máxima.
+- ⚠️ SL: 100% tienen score < 0.5. Considerar umbral mínimo de calidad.
+- ⚠️ TP: 51% son fallback (sin estructura válida). Problema de calidad de estructuras.
+
+## Observaciones automáticas
+- KeptAligned ratio≈ 0.36.
