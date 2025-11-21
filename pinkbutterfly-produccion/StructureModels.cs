@@ -306,6 +306,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// Weak: Ruptura con vela pequeña o bajo volumen
         /// </summary>
         public string BreakMomentum { get; set; } = "Weak";
+        
+        /// <summary>Índice de barra donde se formó el swing que fue roto</summary>
+        public int SwingBarIndex { get; set; }
+        
+        /// <summary>Precio del swing que fue roto (High si es Swing High, Low si es Swing Low)</summary>
+        public double SwingPrice { get; set; }
     }
 
     /// <summary>

@@ -366,6 +366,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 if (broken)
                 {
                     swing.IsBroken = true;
+                    swing.IsActive = false;  // CRÍTICO: roto => inactivo
                     swing.LastUpdatedBarIndex = barIndex;
                     
                     // Verificar existencia antes de actualizar

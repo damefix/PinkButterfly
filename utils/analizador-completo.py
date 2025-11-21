@@ -36,6 +36,11 @@ def parse_log(log_path):
         'sl_selected': re.compile(rf"\[(?:{re_diagnostic})\]\[Risk\]\s*SL_SELECTED:\s*Zone=(\S+)\s*Type=(\w+)\s*Score=([0-9\.,]+)\s*TF=(-?\d+)\s*DistATR=([0-9\.,]+)\s*Age=(\d+)\s*Price=([0-9\.,]+)\s*Reason=(\S+)"),
         'tp_candidate': re.compile(rf"\[(?:{re_diagnostic})\]\[Risk\]\s*TP_CANDIDATE:\s*Idx=(\d+)\s*Priority=(\S+)\s*Type=(\w+)\s*Score=([0-9\.,]+)\s*TF=(\d+)\s*DistATR=([0-9\.,]+)\s*Age=(\d+)\s*Price=([0-9\.,]+)\s*RR=([0-9\.,]+)"),
         'tp_selected': re.compile(rf"\[(?:{re_diagnostic})\]\[Risk\]\s*TP_SELECTED:\s*Zone=(\S+)\s*Priority=(\S+)\s*Type=(\w+)\s*Score=([0-9\.,]+)\s*TF=(-?\d+)\s*DistATR=([0-9\.,]+)\s*Age=(\d+)\s*Price=([0-9\.,]+)\s*RR=([0-9\.,]+)\s*Reason=(\S+)"),
+        # Nuevas métricas V6.1 (Sistema Inteligente)
+        'volatility': re.compile(r"\[VOL\]\s*TF=(\d+)\s*Bar=(\d+)\s*currentATR=([0-9\.,]+)\s*avgATR=([0-9\.,]+)\s*volFactor=([0-9\.,]+)"),
+        'freshness': re.compile(r"\[FRESH\]\s*TF=(\d+)\s*Age=(\d+)\s*Base=(\d+)\s*VolAdj=([0-9\.,]+)\s*Effective=(\d+)\s*Fresh=([0-9\.,]+)"),
+        'scoring_dyn': re.compile(r"\[SCORING_DYN\]\s*TF=(\d+)\s*Prox=([0-9\.,]+)\s*ProxW=([0-9\.,]+)\s*FreshW=([0-9\.,]+)"),
+        'purge_protect': re.compile(r"\[PURGE\]\[PROTECT\]\s*TF=(\d+)\s*Protected=(\d+)"),
     }
     
     stats = {
@@ -43,6 +48,11 @@ def parse_log(log_path):
         'risk': {'accepted': 0, 'rej_sl': 0, 'rej_tp': 0, 'rej_rr': 0, 'rej_entry': 0, 'accepted_details': []},
         'sl_analysis': {'candidates': [], 'selected_list': []},
         'tp_analysis': {'candidates': [], 'selected_list': []},
+        # Nuevas métricas V6.1
+        'volatility': {'samples': [], 'avg_factor': 0.0},
+        'freshness': {'samples': [], 'avg_volAdj': 0.0, 'avg_fresh': 0.0},
+        'scoring_dyn': {'samples': [], 'avg_proxW': 0.0, 'avg_freshW': 0.0},
+        'purge_protect': {'total_protected': 0, 'events': []},
     }
     
     try:
@@ -101,8 +111,47 @@ def parse_log(log_path):
                         'rr': to_float(m.group(9)), 'reason': m.group(10)
                     })
                     continue
+                
+                # Nuevas métricas V6.1
+                m = patterns['volatility'].search(line)
+                if m:
+                    stats['volatility']['samples'].append(to_float(m.group(5)))
+                    continue
+                
+                m = patterns['freshness'].search(line)
+                if m:
+                    stats['freshness']['samples'].append({
+                        'volAdj': to_float(m.group(4)), 'fresh': to_float(m.group(6))
+                    })
+                    continue
+                
+                m = patterns['scoring_dyn'].search(line)
+                if m:
+                    stats['scoring_dyn']['samples'].append({
+                        'proxW': to_float(m.group(3)), 'freshW': to_float(m.group(4))
+                    })
+                    continue
+                
+                m = patterns['purge_protect'].search(line)
+                if m:
+                    protected = int(m.group(2))
+                    stats['purge_protect']['total_protected'] += protected
+                    stats['purge_protect']['events'].append({'tf': int(m.group(1)), 'count': protected})
+                    continue
     except FileNotFoundError:
         print(f"ERROR: No se encontrÃ³ log: {log_path}", file=sys.stderr)
+    
+    # Calcular promedios de nuevas métricas V6.1
+    if stats['volatility']['samples']:
+        stats['volatility']['avg_factor'] = sum(stats['volatility']['samples']) / len(stats['volatility']['samples'])
+    
+    if stats['freshness']['samples']:
+        stats['freshness']['avg_volAdj'] = sum(s['volAdj'] for s in stats['freshness']['samples']) / len(stats['freshness']['samples'])
+        stats['freshness']['avg_fresh'] = sum(s['fresh'] for s in stats['freshness']['samples']) / len(stats['freshness']['samples'])
+    
+    if stats['scoring_dyn']['samples']:
+        stats['scoring_dyn']['avg_proxW'] = sum(s['proxW'] for s in stats['scoring_dyn']['samples']) / len(stats['scoring_dyn']['samples'])
+        stats['scoring_dyn']['avg_freshW'] = sum(s['freshW'] for s in stats['scoring_dyn']['samples']) / len(stats['scoring_dyn']['samples'])
     
     return stats
 

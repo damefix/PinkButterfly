@@ -568,9 +568,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// Meseta confirmada: 200-1000 idénticos ($1,116 | 62 ops | 58.1% WR)
         /// Punto de ruptura: 100=$733 (-35% P&L, -13 ops, -5.0pp WR)
         /// Con MaxAgeBarsForPurge=150 y MinScoreThreshold=0.15, purgas por edad/calidad dominan
-        /// 200 = mínimo sin degradación, máxima eficiencia (-60% vs 500, -80% vs 1000)
+        /// Aumentado a 300 para dar margen con límite de swings de 500
         /// </summary>
-        public int MaxStructuresPerTF { get; set; } = 200;
+        public int MaxStructuresPerTF { get; set; } = 300;
         
         /// <summary>
         /// Score mínimo para mantener una estructura (0.0 - 1.0)
@@ -580,6 +580,56 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// </summary>
         public double MinScoreThreshold { get; set; } = 0.15; // RESTAURADO: valor óptimo histórico (+6% P&L, +13% PF)
         
+        // ========================================================================
+        // DECAY ADAPTATIVO POR TF Y VOLATILIDAD (Sistema Inteligente V6.1)
+        // ========================================================================
+        
+        /// <summary>Período base de decay por TF (en barras) - mercado normal</summary>
+        public int DecayBasePeriod_5m { get; set; } = 50;
+        public int DecayBasePeriod_15m { get; set; } = 100;
+        public int DecayBasePeriod_60m { get; set; } = 240;
+        public int DecayBasePeriod_240m { get; set; } = 240;
+        public int DecayBasePeriod_1440m { get; set; } = 150;
+        
+        /// <summary>
+        /// Factor máximo de ajuste por volatilidad (clamp simétrico)
+        /// 1.5 = en mercado rápido (ATR alto), estructuras duran hasta 1.5x más
+        /// En mercado lento (ATR bajo), duran 1/1.5 = 0.67x menos
+        /// </summary>
+        public double DecayVolatilityMultiplier { get; set; } = 1.5;
+        
+        // ========================================================================
+        // PESOS DINÁMICOS PROXIMITY/FRESHNESS (Scoring Inteligente)
+        // ========================================================================
+        
+        /// <summary>Umbral de proximidad para considerar estructura "muy cerca"</summary>
+        public double ProximityThreshold_VeryClose { get; set; } = 0.7;
+        
+        /// <summary>Umbral de proximidad para considerar estructura "moderada"</summary>
+        public double ProximityThreshold_Moderate { get; set; } = 0.4;
+        
+        /// <summary>Peso de proximity cuando estructura está muy cerca del precio</summary>
+        public double ProximityWeight_VeryClose { get; set; } = 0.50;
+        
+        /// <summary>Peso de proximity cuando estructura está lejos del precio (S/R potencial)</summary>
+        public double ProximityWeight_Far { get; set; } = 0.20;
+        
+        // ========================================================================
+        // PROTECCIÓN CONTRA PURGA (Preservar S/R Válidos)
+        // ========================================================================
+        
+        /// <summary>
+        /// Factor multiplicador de ProximityThresholdATR para proteger estructuras cercanas
+        /// 2.0 = proteger estructuras dentro de 2x el threshold normal de proximity
+        /// </summary>
+        public double PurgeProtection_ProximityFactor { get; set; } = 2.0;
+        
+        /// <summary>
+        /// Factor multiplicador de MinScoreThreshold para proteger estructuras con buen score
+        /// 1.5 = proteger estructuras con score > 1.5x el mínimo requerido
+        /// </summary>
+        public double PurgeProtection_ScoreFactor { get; set; } = 1.5;
+        
         [Obsolete("Usar MaxAgeMinutesForPurge_* ponderado por TF")]
         public int MaxAgeBarsForPurge { get; set; } = 150; // ERA: control único, ahora obsoleto (SERIE 5.2 COMPLETADA)
         
@@ -588,6 +638,19 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// Los LG pierden relevancia rápidamente (ya tienen LG_MaxAgeBars)
         /// </summary>
         public bool EnableAggressivePurgeForLG { get; set; } = true;
+        
+        /// <summary>
+        /// Habilita purga por edad para Swings
+        /// DESACTIVADO por defecto: swings NO rotos son S/R válidos sin límite temporal
+        /// Solo se purgan por score bajo, límite de tipo o límite global
+        /// </summary>
+        public bool EnableAgePurgeForSwings { get; set; } = false;
+        
+        /// <summary>
+        /// Swings NO rotos no sufren decay de freshness (permanentes como S/R)
+        /// FASE 1: Memoria estructural permanente hasta que el swing sea roto
+        /// </summary>
+        public bool FreshnessNoDecayForUnbrokenSwings { get; set; } = true;
         
         /// <summary>
         /// Edad máxima en barras para usar estructuras como Stop Loss (por TF)
@@ -627,11 +690,15 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// <summary>Máximo número de Order Blocks por timeframe</summary>
         public int MaxStructuresByType_OB { get; set; } = 80;
         
-        /// <summary>Máximo número de Swings por timeframe</summary>
-        public int MaxStructuresByType_Swing { get; set; } = 150;
+        /// <summary>
+        /// Máximo número de Swings por timeframe
+        /// Aumentado a 500 para mantener historial extenso de S/R válidos
+        /// Los swings NO rotos no se purgan por edad, solo por límite o score
+        /// </summary>
+        public int MaxStructuresByType_Swing { get; set; } = 500;
         
         /// <summary>Máximo número de BOS/CHoCH por timeframe</summary>
-        public int MaxStructuresByType_BOS { get; set; } = 50;
+        public int MaxStructuresByType_BOS { get; set; } = 200;
         
         /// <summary>Máximo número de POIs por timeframe</summary>
         public int MaxStructuresByType_POI { get; set; } = 60;
@@ -709,17 +776,130 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         // INTRADÍA: LIMITES SL/TP Y RANGOS P3
         // =====================================================================
         /// <summary>Cap de distancia de SL en puntos (régimen Normal)</summary>
-        public double MaxSLDistancePoints_Normal { get; set; } = 37.0;
+        public double MaxSLDistancePoints_Normal { get; set; } = 28.0;  // V6.1c: P90 real (informe)
         /// <summary>Cap de distancia de SL en puntos (régimen HighVol)</summary>
         public double MaxSLDistancePoints_HighVol { get; set; } = 37.0;
         
         /// <summary>Cap de distancia de TP en puntos (régimen Normal)</summary>
-        public double MaxTPDistancePoints_Normal { get; set; } = 54.0;
+        public double MaxTPDistancePoints_Normal { get; set; } = 52.0;  // V6.1c: P90 real (informe)
         /// <summary>Cap de distancia de TP en puntos (régimen HighVol)</summary>
         public double MaxTPDistancePoints_HighVol { get; set; } = 54.0;
         
         /// <summary>Cap global de distancia de TP en ATR (para fallback P4)</summary>
         public double MaxTPDistanceATR { get; set; } = 5.0;
+        
+        // =====================================================================
+        // V6.1d: SISTEMA ADAPTATIVO - LÍMITES DINÁMICOS POR VOLATILIDAD
+        // =====================================================================
+        
+        /// <summary>
+        /// Base para MaxSLDistancePoints (se escala por volFactor)
+        /// P90 histórico: 28.0 pts
+        /// </summary>
+        public double MaxSLDistancePoints_NormalBase { get; set; } = 18.0;
+        
+        /// <summary>
+        /// Base para MaxTPDistancePoints (se escala por volFactor)
+        /// P90 histórico: 52.0 pts
+        /// </summary>
+        public double MaxTPDistancePoints_NormalBase { get; set; } = 45.0;
+        
+        /// <summary>
+        /// Base para MaxSLDistanceATR (cap en ATR, se escala por volFactor)
+        /// Usado como alternativa a cap en puntos (OR logic)
+        /// </summary>
+        public double MaxSLDistanceATR_Base { get; set; } = 4.0;
+        
+        /// <summary>
+        /// Lookback para cálculo de ATR promedio (EMA)
+        /// Usado para normalizar volatilidad: volFactor = currentATR / avgATR
+        /// </summary>
+        public int ATRVolLookbackBars { get; set; } = 100;
+        
+        /// <summary>
+        /// Factor mínimo de volatilidad (clamp inferior)
+        /// volFactor se acota entre [VolFactorMin, VolFactorMax]
+        /// </summary>
+        public double VolFactorMin { get; set; } = 0.70;
+        
+        /// <summary>
+        /// Factor máximo de volatilidad (clamp superior)
+        /// </summary>
+        public double VolFactorMax { get { return 1.50; } }
+        
+        // =====================================================================
+        // V6.1d: R:R MÍNIMO ADAPTATIVO POR WIN RATE RECIENTE
+        // =====================================================================
+        
+        /// <summary>
+        /// Ventana de operaciones ejecutadas para calcular WR reciente
+        /// minRR = (1-WR)/WR con floor/ceil
+        /// </summary>
+        public int RecentWR_Window { get; set; } = 100;
+        
+        /// <summary>
+        /// R:R mínimo absoluto (floor)
+        /// Aunque WR sea muy alto, no bajar de este valor
+        /// </summary>
+        public double RRminFloor { get; set; } = 1.20;
+        
+        /// <summary>
+        /// R:R máximo exigido (ceil)
+        /// Aunque WR sea muy bajo, no exigir más de este valor
+        /// </summary>
+        public double RRminCeil { get; set; } = 3.00;
+        
+        // =====================================================================
+        // V6.1d: TIMING ADAPTATIVO (APPROACH/MOMENTUM/CANDLE)
+        // =====================================================================
+        
+        /// <summary>
+        /// Lookback base para approach (distancia decreciente)
+        /// Se adapta por volatilidad: lookback = base × clamp(1/vol, 0.7, 1.5)
+        /// </summary>
+        public int ApproachLookbackBars_Base { get; set; } = 3;
+        
+        /// <summary>
+        /// Epsilon base para approach (mejora mínima en ATR)
+        /// Se adapta por volatilidad: eps = base × clamp(vol, 0.7, 1.5)
+        /// </summary>
+        public double ApproachEpsilonATR_Base { get; set; } = 0.02;
+        
+        /// <summary>
+        /// Periodo SMA/EMA para momentum en TF 5m
+        /// Se adapta por volatilidad
+        /// </summary>
+        public int MomentumPeriod_5m { get; set; } = 3;
+        
+        /// <summary>
+        /// Periodo SMA/EMA para momentum en TF 15m
+        /// </summary>
+        public int MomentumPeriod_15m { get; set; } = 5;
+        
+        /// <summary>
+        /// Periodo SMA/EMA para momentum en TF 60m
+        /// </summary>
+        public int MomentumPeriod_60m { get; set; } = 8;
+        
+        /// <summary>
+        /// Confirmaciones requeridas base (N-de-3: approach/momentum/candle)
+        /// Se ajusta dinámicamente por volatilidad y bias:
+        /// - vol baja + bias débil → 3/3
+        /// - vol alta + bias fuerte → 2/3
+        /// </summary>
+        public int TimingConfirmationRequired_Base { get; set; } = 2;
+        
+        /// <summary>
+        /// Ratio base cuerpo/rango para confirmación de vela
+        /// Se adapta por volatilidad: ratio = base × clamp(1/vol, 0.8, 1.3)
+        /// </summary>
+        public double CandleBodyRatioBase { get; set; } = 0.30;
+        
+        /// <summary>
+        /// Ratio base mecha/cuerpo para confirmación de vela
+        /// Se adapta por volatilidad: ratio = base × clamp(vol, 0.8, 1.3)
+        /// </summary>
+        public double CandleWickRatioBase { get; set; } = 1.50;
         
         /// <summary>Distancia mínima de TP P3 en ATR (intradía)</summary>
         public double MinTPDistanceATR_P3 { get; set; } = 0.8;
@@ -759,6 +939,14 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// Reduce el tiempo de carga inicial sin perder contexto operativo
         /// </summary>
         public int BacktestBarsForAnalysis { get; set; } = 2500;  // Reducido para acelerar tests durante afinación
+        
+        /// <summary>
+        /// Barras de calentamiento en el TF de decisión (warmup period).
+        /// Durante estas barras se ejecuta el pipeline pero NO se registran órdenes.
+        /// Valor por defecto: 672 barras de 15m ≈ 7 días (10,080 minutos / 15 = 672)
+        /// Razón: Suficiente para estabilizar swings de TF alto, BOS history y volatilidad normalizada.
+        /// </summary>
+        public int WarmupBarsDecisionTF { get; set; } = 672;
         
         /// <summary>
         /// Ratio del margen incremental (0.0-1.0) para dejar barras disponibles después del replay
@@ -825,7 +1013,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// Reduce significativamente el tiempo de carga y el spam de logs
         /// Ejemplo: 100 = solo loggear las últimas 100 barras del histórico
         /// </summary>
-        public int LoggingThresholdBars { get; set; } = 100;
+        public int LoggingThresholdBars { get; set; } = 2000;
 
         /// <summary>
         /// Muestreo de logging forense de Risk: 0 = desactivado; N = loggear 1 de cada N rechazos con detalle (Entry/SL/TP/CurrentPrice)
@@ -955,7 +1143,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// Operaciones con R:R < 1.0 se rechazan
         /// MODO DIAGNÓSTICO: Bajado a 0.70 para ver todas las señales con R:R razonable
         /// </summary>
-        public double MinRiskRewardRatio { get; set; } = 1.10;
+        public double MinRiskRewardRatio { get; set; } = 1.50;  // V6.1c: Coherente con WR≈40%
         
         /// <summary>
         /// Buffer adicional para el Stop Loss (como factor del ATR)

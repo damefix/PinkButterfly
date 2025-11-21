@@ -56,6 +56,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
         /// <summary>Logger para debugging y errores</summary>
         private readonly ILogger _logger;
+        
+        /// <summary>V6.1d-FINAL: RiskCalculator para SL multi-candidato stateless</summary>
+        private readonly RiskCalculator _riskCalculator;
 
         /// <summary>Motor de scoring para cálculo de puntuaciones</summary>
         private readonly ScoringEngine _scoringEngine;
@@ -248,6 +251,10 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
             // Validar configuración
             _config.Validate();
+            
+            // V6.1d-FINAL: Inicializar RiskCalculator para SL multi-candidato
+            _riskCalculator = new RiskCalculator();
+            _riskCalculator.Initialize(_config, _logger);
 
             // Inicializar estructuras de datos
             _structuresListByTF = new Dictionary<int, List<StructureBase>>();
@@ -542,12 +549,17 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             // REPLAY HISTÓRICO: construir estado detector-por-detector desde skip hasta end
             BuildHistoricalState(barData);
             
-            // RESET CRÍTICO: Permitir que OnBarClose ejecute pipeline en TODA la ventana histórica
-            // Solo reseteamos el TF de decisión; los demás TF mantienen sus detectores precargados
-            if (_barsToSkipPerTF.TryGetValue(decisionTF, out int skipDecisionReset))
+            // V6.1b: DECISION REPLAY CON WARMUP INTERNO
+            // Ejecuta replay de decisiones sobre la ventana histórica [skip..end]
+            // con warmup interno (primeras N barras sin registro de trades)
+            // Solo si hay DecisionEngine y TradeManager inyectados
+            if (!_isReplay && _decisionEngine != null && _tradeManager != null)
             {
-                _lastProcessedBarByTF[decisionTF] = skipDecisionReset - 1;
-                _logger?.Info($"[RESET_DECISION_TF] TF={decisionTF} lastProcessed reseteado a {skipDecisionReset - 1} para reprocesar ventana histórica con pipeline completo");
+                RunDecisionReplayWithWarmup(barData);
+            }
+            else
+            {
+                _logger?.Info($"[DECISION_REPLAY] Skipped: _isReplay={_isReplay} _decisionEngine={(_decisionEngine != null)} _tradeManager={(_tradeManager != null)}");
             }
         }
 
@@ -587,7 +599,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                         queue.Add((tf, i, barTime));
                     }
                 }
-            }
+            }  // <-- cierra foreach (var tf in _config.TimeframesToUse)
             
             // ORDENAR POR TIEMPO ESTRICTO: time ASC → tf ASC → idx ASC (determinista)
             queue = queue.OrderBy(x => x.time).ThenBy(x => x.tf).ThenBy(x => x.idx).ToList();
@@ -661,6 +673,18 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             
             _logger.Info($"[REPLAY_HIST] ✅ Replay histórico completado usando orden temporal estricto");
             
+            // Inicializar avgATR por TF con valor al final del replay histórico
+            foreach (var tf in _config.TimeframesToUse)
+            {
+                int lastBar = _barsEndPerTF.TryGetValue(tf, out int end) ? end : 0;
+                if (lastBar > 0)
+                {
+                    double atr = barData.GetATR(tf, 14, lastBar);
+                    if (atr > 0) _avgATRByTF[tf] = atr;
+                }
+            }
+            _logger.Info($"[REPLAY_HIST] ✅ Volatilidad base inicializada para {_avgATRByTF.Count} TFs");
+            
             // Log final de lastProcessed por TF CON VERIFICACIÓN
             _logger.Info($"[REPLAY_FINAL] ========== RESUMEN LASTPROCESSED ==========");
             foreach (var tf in _config.TimeframesToUse)
@@ -692,6 +716,199 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 _logger.Info($"[REPLAY_FINAL] TF={tf} hasSkip={hasSkip} hasEnd={hasEnd}");
             }
             _logger.Info($"[REPLAY_FINAL] =============================================");
+        }
+
+        /// <summary>
+        /// V6.1b: Ejecuta un replay de decisiones sobre la ventana histórica con warmup interno.
+        /// Durante el warmup se generan decisiones pero NO se registran trades (para estabilización).
+        /// Después del warmup se registran trades normalmente.
+        /// Mantiene determinismo MTF usando maxBarIndex en UpdateTrades.
+        /// </summary>
+        private void RunDecisionReplayWithWarmup(IBarDataProvider barData)
+        {
+            int decisionTF = _config.DecisionTimeframeMinutes;
+            
+            if (!_barsToSkipPerTF.TryGetValue(decisionTF, out int skipDecision) ||
+                !_barsEndPerTF.TryGetValue(decisionTF, out int endDecision))
+            {
+                _logger?.Warning($"[DECISION_REPLAY] No se puede ejecutar: ventana no configurada para TF={decisionTF}");
+                return;
+            }
+            
+            // Warmup interno: primeras N barras para estabilización (sin registro de trades)
+            int warmupStartIdx = skipDecision + _config.WarmupBarsDecisionTF;
+            
+            _logger?.Info($"[DECISION_REPLAY] ========== INICIO REPLAY DE DECISIONES ==========");
+            _logger?.Info($"[DECISION_REPLAY] TF={decisionTF} ventana=[{skipDecision}..{endDecision}] ({endDecision - skipDecision + 1} barras)");
+            _logger?.Info($"[DECISION_REPLAY] Warmup interno: [{skipDecision}..{warmupStartIdx - 1}] ({_config.WarmupBarsDecisionTF} barras)");
+            _logger?.Info($"[DECISION_REPLAY] Operativo: [{warmupStartIdx}..{endDecision}] ({endDecision - warmupStartIdx + 1} barras)");
+            
+            // Obtener fecha aproximada del inicio operativo para auditoría
+            try
+            {
+                DateTime warmupStartTime = barData.GetBarTime(decisionTF, warmupStartIdx);
+                _logger?.Info($"[DECISION_REPLAY] Inicio operativo aproximado: {warmupStartTime:yyyy-MM-dd HH:mm}");
+            }
+            catch
+            {
+                // Si no se puede obtener la fecha, continuar sin ella
+            }
+            
+            int decisionsGenerated = 0;
+            int decisionsRegistered = 0;
+            int tradesRegistered = 0;
+            
+            for (int idx = skipDecision; idx <= endDecision; idx++)
+            {
+                bool inWarmup = (idx < warmupStartIdx);
+                
+                // Throttle de logs en warmup (INFO cada 100 barras)
+                if (inWarmup && idx % 100 == 0)
+                {
+                    _logger?.Debug($"[DECISION_REPLAY][WARMUP] Bar={idx}/{warmupStartIdx - 1} (warmup {idx - skipDecision}/{_config.WarmupBarsDecisionTF})");
+                }
+                
+                // Generar decisión (siempre, incluso en warmup, para ejercitar pipeline)
+                dynamic decisionEngineInstance = _decisionEngine;
+                var decision = decisionEngineInstance.GenerateDecision(_provider, this, idx, decisionTF, _accountSize);
+                
+                if (decision != null && (decision.Action == "BUY" || decision.Action == "SELL"))
+                {
+                    decisionsGenerated++;
+                    
+                    // SOLO registrar si NO estamos en warmup
+                    if (!inWarmup)
+                    {
+                        // V6.1d-FINAL: Gate de APPROACH preventivo
+                        bool approachOK = IsApproachingEntryAdaptive(decisionTF, idx, decision.Action, decision.Entry);
+                        if (!approachOK)
+                        {
+                            _logger?.Info($"[ENTRY_APPROACH_REJECT] Bar={idx} Action={decision.Action} → precio no se acerca");
+                            continue;
+                        }
+                        
+                        // V6.1d: Gate de TIMING adaptativo
+                        bool timingOK = IsTimingConfirmedAdaptive(decisionTF, idx, decision.Action, decision.Entry, _currentMarketBias);
+                        if (!timingOK)
+                        {
+                            _logger?.Info($"[TIMING_REJECT] TF={decisionTF} Bar={idx} Action={decision.Action} Entry={decision.Entry:F2} → approach/momentum/candle no confirman");
+                            continue;
+                        }
+                        
+                        // BIAS COMPUESTO RÁPIDO (rechazo si va en contra)
+                        var bf = GetFastCompositeBias(decisionTF, idx);
+                        _logger?.Info($"[BIAS_FAST] score={bf.score:F3} dir={bf.dir}");
+                        bool biasWith = (bf.dir == "Bullish" && decision.Action == "BUY") || (bf.dir == "Bearish" && decision.Action == "SELL");
+                        if (!biasWith && bf.dir != "Neutral")
+                        {
+                            _logger?.Info($"[BIAS_FAST_REJECT] TF={decisionTF} Bar={idx} Action={decision.Action} BiasFast={bf.dir} Score={bf.score:F2}");
+                            continue;
+                        }
+
+                        // V6.1d-FINAL: Gate de CONFLUENCIA HTF (adaptativo)
+                        if (!HasHighTimeframeConfluence(decisionTF, idx, decision.Action, decision.Entry))
+                        {
+                            _logger?.Info($"[HTF_CONFL_REJECT] TF={decisionTF} Bar={idx} Action={decision.Action} Entry={decision.Entry:F2}");
+                            continue;
+                        }
+
+                        // V6.1d-FINAL: Orquestar SL multi-candidato
+                        double vol = GetVolFactor(60, idx);
+                        double minRR = _tradeManager.GetAdaptiveMinRR();
+                        var slCands = GenerateSLCandidates(decisionTF, idx, decision.Entry, decision.TakeProfit, vol);
+                        
+                        _logger?.Info($"[ADAPTIVE_LIMITS] vol={vol:F2} minRR={minRR:F2} slCands={slCands.Count}");
+                        
+                        // Llamar a RiskCalculator stateless
+                        double atrDec = _provider.GetATR(decisionTF, 14, idx);
+                        var risk = _riskCalculator.CalculateRisk(
+                            decision.Action,
+                            decision.Entry,
+                            decision.TakeProfit,
+                            slCands,
+                            vol,
+                            minRR,
+                            decisionTF,
+                            idx,
+                            atrDec
+                        );
+                        
+                        if (!risk.Accepted)
+                        {
+                            _logger?.Info($"[RC_REJECT] {risk.Reason}");
+                            continue;
+                        }
+                        
+                        // SL/TP finales del RiskCalculator
+                        double finalSL = risk.SL;
+                        double finalTP = risk.TP;
+                        
+                        DateTime entryBarTime = barData.GetBarTime(decisionTF, idx);
+                        double currentPrice = barData.GetClose(decisionTF, idx);
+                        double structureScore = 0.0;
+                        
+                        if (!string.IsNullOrEmpty(decision.DominantStructureId))
+                        {
+                            var structure = GetStructureById(decision.DominantStructureId);
+                            if (structure != null)
+                                structureScore = structure.Score;
+                        }
+                        
+                        _tradeManager.RegisterTrade(
+                            decision.Action,
+                            decision.Entry,
+                            finalSL,
+                            finalTP,
+                            idx,                    // entryBar = barra de 15m real
+                            entryBarTime,           // entryBarTime de 15m real
+                            decisionTF,             // tfDominante = 15m
+                            decision.DominantStructureId ?? "",
+                            currentPrice,
+                            decision.DistanceToEntryATR,
+                            "Normal",
+                            structureScore,
+                            vol   // V6.1d: factor de volatilidad
+                        );
+                        
+                        decisionsRegistered++;
+                            
+                        // Log cada 200 registros para seguimiento
+                        if (decisionsRegistered % 200 == 0)
+                        {
+                            _logger?.Info($"[DECISION_REPLAY][PROGRESS] Bar={idx} decisiones_registradas={decisionsRegistered}");
+                        }
+                    }
+                }
+            // keep for-loop open here; do not close before UpdateTrades
+            
+                // V6.0n: UpdateTrades con CORTE TEMPORAL para determinismo MTF
+                // Esto evalúa trades pendientes/ejecutados usando SOLO datos hasta idx
+                double currentHigh = barData.GetHigh(decisionTF, idx);
+                double currentLow = barData.GetLow(decisionTF, idx);
+                double currentClose = barData.GetClose(decisionTF, idx);
+                DateTime currentTime = barData.GetBarTime(decisionTF, idx);
+                
+                _tradeManager?.UpdateTrades(
+                    currentHigh, 
+                    currentLow, 
+                    idx, 
+                    currentTime, 
+                    currentClose, 
+                    this, 
+                    barData, 
+                    "Normal", 
+                    maxBarIndex: idx  // CRÍTICO: corte temporal
+                );
+                
+                // CRÍTICO: Actualizar lastProcessed para que OnBarClose no duplique barras
+                _lastProcessedBarByTF[decisionTF] = idx;
+            } // <-- close for (int idx = ...)
+            
+            _logger?.Info("[DECISION_REPLAY] ========== FIN REPLAY DE DECISIONES ==========");
+            _logger?.Info($"[DECISION_REPLAY] Decisiones generadas: {decisionsGenerated} (warmup + operativo)");
+            _logger?.Info($"[DECISION_REPLAY] Decisiones registradas: {decisionsRegistered} (solo operativo)");
+            _logger?.Info($"[DECISION_REPLAY] lastProcessedBarByTF[{decisionTF}] = {_lastProcessedBarByTF[decisionTF]}");
+            _logger?.Info("[DECISION_REPLAY] =====================================================");
         }
 
         /// <summary>
@@ -889,11 +1106,79 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 {
                     _logger?.Info($"[DECISION_SCHEDULER] Drenando barra TF={decisionTF} Idx={idx}");
                     
+                    // V6.1b: El warmup ya se aplicó durante RunDecisionReplayWithWarmup
+                    // Este scheduler solo procesa barras incrementales (después de la ventana histórica)
+                    // por lo que todas las barras aquí ya están fuera del periodo de warmup
+                    
                     dynamic decisionEngineInstance = _decisionEngine;
                     var decision = decisionEngineInstance.GenerateDecision(_provider, this, idx, decisionTF, _accountSize);
                     
                     if (decision != null && (decision.Action == "BUY" || decision.Action == "SELL"))
                     {
+                        // V6.1d-FINAL: Gate de APPROACH preventivo
+                        bool approachOK = IsApproachingEntryAdaptive(decisionTF, idx, decision.Action, decision.Entry);
+                        if (!approachOK)
+                        {
+                            _logger?.Info($"[ENTRY_APPROACH_REJECT] Bar={idx} Action={decision.Action} → precio no se acerca");
+                            continue;
+                        }
+                        
+                        // V6.1d: Gate de TIMING adaptativo
+                        bool timingOK = IsTimingConfirmedAdaptive(decisionTF, idx, decision.Action, decision.Entry, _currentMarketBias);
+                        if (!timingOK)
+                        {
+                            _logger?.Info($"[TIMING_REJECT] TF={decisionTF} Bar={idx} Action={decision.Action} Entry={decision.Entry:F2} → approach/momentum/candle no confirman");
+                            continue;
+                        }
+                        
+                        // BIAS COMPUESTO RÁPIDO (rechazo si va en contra)
+                        var bf = GetFastCompositeBias(decisionTF, idx);
+                        _logger?.Info($"[BIAS_FAST] score={bf.score:F3} dir={bf.dir}");
+                        bool biasWith = (bf.dir == "Bullish" && decision.Action == "BUY") || (bf.dir == "Bearish" && decision.Action == "SELL");
+                        if (!biasWith && bf.dir != "Neutral")
+                        {
+                            _logger?.Info($"[BIAS_FAST_REJECT] TF={decisionTF} Bar={idx} Action={decision.Action} BiasFast={bf.dir} Score={bf.score:F2}");
+                            continue;
+                        }
+
+                        // V6.1d-FINAL: Gate de CONFLUENCIA HTF (adaptativo)
+                        if (!HasHighTimeframeConfluence(decisionTF, idx, decision.Action, decision.Entry))
+                        {
+                            _logger?.Info($"[HTF_CONFL_REJECT] TF={decisionTF} Bar={idx} Action={decision.Action} Entry={decision.Entry:F2}");
+                            continue;
+                        }
+
+                        // V6.1d-FINAL: Orquestar SL multi-candidato
+                        double vol = GetVolFactor(60, idx);
+                        double minRR = _tradeManager.GetAdaptiveMinRR();
+                        var slCands = GenerateSLCandidates(decisionTF, idx, decision.Entry, decision.TakeProfit, vol);
+                        
+                        _logger?.Info($"[ADAPTIVE_LIMITS] vol={vol:F2} minRR={minRR:F2} slCands={slCands.Count}");
+                        
+                        // Llamar a RiskCalculator stateless
+                        double atrDec = _provider.GetATR(decisionTF, 14, idx);
+                        var risk = _riskCalculator.CalculateRisk(
+                            decision.Action,
+                            decision.Entry,
+                            decision.TakeProfit,
+                            slCands,
+                            vol,
+                            minRR,
+                            decisionTF,
+                            idx,
+                            atrDec
+                        );
+                        
+                        if (!risk.Accepted)
+                        {
+                            _logger?.Info($"[RC_REJECT] {risk.Reason}");
+                            continue;
+                        }
+                        
+                        // SL/TP finales del RiskCalculator
+                        double finalSL = risk.SL;
+                        double finalTP = risk.TP;
+                        
                         DateTime entryBarTime = _provider.GetBarTime(decisionTF, idx);
                         double currentPrice = _provider.GetClose(decisionTF, idx);
                         
@@ -902,26 +1187,27 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                         if (!string.IsNullOrEmpty(decision.DominantStructureId))
                         {
                             var structure = GetStructureById(decision.DominantStructureId);
-                            if (structure != null)
-                                structureScore = structure.Score;
-                        }
-                        
-                        _tradeManager.RegisterTrade(
-                            decision.Action,
-                            decision.Entry,
-                            decision.StopLoss,
-                            decision.TakeProfit,
-                            idx,                    // entryBar = barra de 15m real
-                            entryBarTime,           // entryBarTime de 15m real
-                            decisionTF,             // tfDominante = 15m
-                            decision.DominantStructureId ?? "",
-                            currentPrice,
-                            decision.DistanceToEntryATR,
-                            "Normal",
-                            structureScore
-                        );
-                        
-                        decisionsGenerated++;
+                                if (structure != null)
+                                    structureScore = structure.Score;
+                            }
+                            
+                            _tradeManager.RegisterTrade(
+                                decision.Action,
+                                decision.Entry,
+                                finalSL,
+                                finalTP,
+                                idx,                    // entryBar = barra de 15m real
+                                entryBarTime,           // entryBarTime de 15m real
+                                decisionTF,             // tfDominante = 15m
+                                decision.DominantStructureId ?? "",
+                                currentPrice,
+                                decision.DistanceToEntryATR,
+                                "Normal",
+                                structureScore,
+                                vol   // V6.1d: factor de volatilidad
+                            );
+                            
+                            decisionsGenerated++;
                     }
                     
                     // V6.0n: UpdateTrades con CORTE TEMPORAL para determinismo MTF
@@ -1033,7 +1319,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                                 currentPrice,              // currentPrice
                                 decision.DistanceToEntryATR,  // distanceToEntryATR
                                 "Normal",                  // currentRegime (default)
-                                structureScore             // V6.0n: score de la estructura
+                                structureScore,            // V6.0n: score de la estructura
+                                GetVolFactor(60, barIndex) // V6.1d: factor de volatilidad
                             );
                         }
                     }
@@ -1948,7 +2235,39 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     
                     // Calcular freshness (edad de la estructura) para la fórmula rápida
                     int age = barIndex - structure.CreatedAtBarIndex;
-                    double freshness = CalculateFreshness(age, tfMinutes);
+                    double freshness;
+                    if (_config.FreshnessNoDecayForUnbrokenSwings && structure is SwingInfo sw1 && !sw1.IsBroken)
+                    {
+                        freshness = 1.0;
+                        if (_config.EnablePerfDiagnostics)
+                            _logger.Info($"[FRESH_ADAPT] TF={tfMinutes} Type=SWING age={age} fresh=1.00 reason=UnbrokenSwing");
+                    }
+                    else
+                    {
+                        freshness = CalculateFreshness(age, tfMinutes, barIndex);
+                    }
+                    
+                    // PESOS DINÁMICOS: ajustar freshness/proximity según cercanía al precio
+                    // Cerca del precio → más peso a proximity
+                    // Lejos del precio → más peso a freshness (S/R potencial)
+                    double thrLow = _config.ProximityThreshold_Moderate;   // ej. 0.4
+                    double thrHigh = _config.ProximityThreshold_VeryClose; // ej. 0.7
+                    double wFar = _config.ProximityWeight_Far;             // ej. 0.20
+                    double wClose = _config.ProximityWeight_VeryClose;     // ej. 0.50
+                    
+                    double t;
+                    if (proximityFactor <= thrLow) t = 0.0;
+                    else if (proximityFactor >= thrHigh) t = 1.0;
+                    else t = (proximityFactor - thrLow) / Math.Max(1e-9, (thrHigh - thrLow));
+                    
+                    double proximityWeight = wFar + (wClose - wFar) * t;
+                    double freshnessWeight = Math.Max(0.0, 1.0 - proximityWeight);
+                    
+                    // Logging diagnóstico (solo primera estructura por barra)
+                    if (_config.EnablePerfDiagnostics && updatedCount == 0)
+                    {
+                        _logger.Debug($"[SCORING_DYN] TF={tfMinutes} Prox={proximityFactor:F2} ProxW={proximityWeight:F2} FreshW={freshnessWeight:F2}");
+                    }
 
                     if (structure is LiquidityGrabInfo)
                     {
@@ -1963,14 +2282,14 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                         }
                         else
                         {
-                            // Usar fórmula rápida como el resto
-                            structure.Score = (freshness * 0.7) + (proximityFactor * 0.3);
+                            // Usar fórmula rápida con pesos dinámicos
+                            structure.Score = (freshness * freshnessWeight) + (proximityFactor * proximityWeight);
                         }
                     }
                     else
                     {
-                        // Fórmula rápida para el resto de estructuras
-                        structure.Score = (freshness * 0.7) + (proximityFactor * 0.3);
+                        // Fórmula rápida para el resto de estructuras (pesos dinámicos)
+                        structure.Score = (freshness * freshnessWeight) + (proximityFactor * proximityWeight);
                     }
 
                     // Bonus leve para FVGs de TF alto para desempatar (garantiza TF240 > TF60)
@@ -2035,17 +2354,525 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             }
         }
         
+        // ============================================================================
+        // VOLATILIDAD NORMALIZADA (EMA de ATR para referencia por TF)
+        // ============================================================================
+        
+        private readonly Dictionary<int, double> _avgATRByTF = new Dictionary<int, double>();
+        /// <summary>
+        /// V6.1d: Calcula factor de volatilidad normalizada (siempre en TF 60m)
+        /// volFactor = clamp(currentATR / avgATR, VolFactorMin, VolFactorMax)
+        /// > 1.0 = mercado rápido/volátil
+        /// < 1.0 = mercado lento/tranquilo
+        /// </summary>
+        private double GetVolFactor(int tfVol, int idx)
+        {
+            double currATR = _provider.GetATR(60, 14, idx);
+            if (currATR <= 0) return 1.0;
+            
+            // EMA rolling de ATR60 con lookback configurable
+            if (!_avgATRByTF.ContainsKey(60))
+            {
+                _avgATRByTF[60] = currATR;
+            }
+            else
+            {
+                double alpha = 2.0 / (_config.ATRVolLookbackBars + 1.0);
+                _avgATRByTF[60] = (_avgATRByTF[60] * (1.0 - alpha)) + (currATR * alpha);
+            }
+            
+            double avgATR = _avgATRByTF[60];
+            if (avgATR <= 0) avgATR = currATR;
+            
+            double raw = currATR / Math.Max(1e-9, avgATR);
+            double volFactor = Math.Min(_config.VolFactorMax, Math.Max(_config.VolFactorMin, raw));
+            
+            // Logging diagnóstico cada 100 barras
+            if (_config.EnablePerfDiagnostics && idx % 100 == 0)
+            {
+                _logger.Debug($"[VOL] Bar={idx} currATR={currATR:F2} avgATR={avgATR:F2} raw={raw:F2} volFactor={volFactor:F2}");
+            }
+            
+            return volFactor;
+        }
+        
+        /// <summary>
+        /// DEPRECATED: Mantener para compatibilidad, redirige a GetVolFactor
+        /// </summary>
+        private double GetVolatilityFactor(int tfMinutes, int barIndex)
+        {
+            return GetVolFactor(tfMinutes, barIndex);
+        }
+        
+        // ============================================================================
+        // V6.1d-FINAL: GENERACIÓN DE CANDIDATOS SL (MULTI-CANDIDATO)
+        // ============================================================================
+        
+        /// <summary>
+        /// Genera lista de candidatos SL adaptativos: swings + ATR-stops escalados por volatilidad
+        /// CoreEngine orquesta (tiene acceso a swings), RiskCalculator filtra/elige
+        /// </summary>
+        private List<double> GenerateSLCandidates(int tf, int idx, double entry, double tp, double volFactor)
+        {
+            var candidates = new List<double>();
+
+            // 1) Swings protectores en TF de decisión (inmediato y previos cercanos)
+            foreach (var sl in EnumerateProtectiveSwings(tf, idx, entry, tp, volFactor, maxPerTF: 4))
+                candidates.Add(sl);
+
+            // 2) Swings protectores en HTF (60m, 240m) - con límite pequeño por TF
+            foreach (var htf in new[] { 60, 240 })
+            {
+                if (htf == tf) continue;
+                foreach (var sl in EnumerateProtectiveSwings(htf, idx, entry, tp, volFactor, maxPerTF: 3))
+                    candidates.Add(sl);
+            }
+
+            // 3) ATR-stops adaptativos por volatilidad
+            double atr = Math.Max(1e-9, _provider.GetATR(tf, 14, idx));
+            double kMin = Math.Max(1.0, 1.2 / Math.Max(1e-9, volFactor));
+            double kMax = 2.5 * Math.Max(1.0, volFactor);
+            
+            bool isBuy = (tp >= entry);
+            for (double k = kMin; k <= kMax + 1e-9; k += 0.4)
+            {
+                double sl = isBuy ? (entry - k * atr) : (entry + k * atr);
+                candidates.Add(sl);
+            }
+            
+            if (candidates.Count == 0)
+            {
+                // Fallback: al menos un SL básico
+                double fallbackK = 1.5;
+                double fallbackSL = isBuy ? (entry - fallbackK * atr) : (entry + fallbackK * atr);
+                candidates.Add(fallbackSL);
+            }
+            
+            return candidates.Distinct().ToList();
+        }
+
+        /// <summary>
+        /// Devuelve SL candidatos a partir de swings cercanos y activos del TF indicado,
+        /// adaptado a la dirección (BUY usa swing lows por debajo; SELL swing highs por encima).
+        /// Limita a maxPerTF por TF y prioriza cercanía en ATR y frescura.
+        /// </summary>
+        private IEnumerable<double> EnumerateProtectiveSwings(int tfMinutes, int decisionIdx, double entry, double tp, double volFactor, int maxPerTF)
+        {
+            var now = _provider.GetBarTime(_config.DecisionTimeframeMinutes, decisionIdx);
+            // Mapea tiempo actual a índice del TF objetivo (para evitar mirar "futuro")
+            int idxTF = _provider.GetBarIndexFromTime(tfMinutes, now);
+            if (idxTF < 0) yield break;
+
+            bool isBuy = tp >= entry;
+            double atrTF = Math.Max(1e-9, _provider.GetATR(tfMinutes, 14, idxTF));
+            // Piso adaptativo de SL en ATR (evita SL “a un tick”): más alto en baja vol, más bajo en alta vol
+            double minSlAtr = Math.Min(0.8, Math.Max(0.25, 0.45 * (1.0 / Math.Max(1e-9, volFactor))));
+
+            // Tomar swings recientes del TF (usando estructuras almacenadas)
+            var recentSwings = GetAllStructures(tfMinutes)
+                .OfType<SwingInfo>()
+                .Where(s => s.IsActive && s.LastUpdatedBarIndex <= idxTF)
+                .Select(s =>
+                {
+                    double swingPrice = s.IsHigh ? s.High : s.Low;
+                    double distPts = Math.Abs(swingPrice - entry);
+                    double distATR = distPts / atrTF;
+                    int ageBars = Math.Max(0, idxTF - s.LastUpdatedBarIndex);
+                    double fresh;
+                    if (_config.FreshnessNoDecayForUnbrokenSwings && s is SwingInfo sw2 && !sw2.IsBroken)
+                    {
+                        fresh = 1.0;
+                        if (_config.EnablePerfDiagnostics)
+                            _logger.Info($"[FRESH_ADAPT] TF={tfMinutes} Type=SWING age={ageBars} fresh=1.00 reason=UnbrokenSwing");
+                    }
+                    else
+                    {
+                        fresh = CalculateFreshness(ageBars, tfMinutes, idxTF);
+                    }
+                    double adjusted = s.Score * fresh;
+                    return new { swing = s, swingPrice, distPts, distATR, adjusted };
+                })
+                // excluir swings pegados al entry (evita RR inflado artificialmente)
+                .Where(x => x.distATR >= minSlAtr)
+                .Where(x => isBuy ? (x.swing.IsHigh == false && x.swingPrice < entry) : (x.swing.IsHigh == true && x.swingPrice > entry))
+                // filtra swings demasiado lejanos en ATR (adaptado por vol implícito en freshness/score)
+                .OrderBy(x => x.distATR)
+                .ThenByDescending(x => x.adjusted)
+                .Take(Math.Max(1, maxPerTF))
+                .ToList();
+
+            foreach (var x in recentSwings)
+                yield return x.swingPrice;
+        }
+
+        /// <summary>
+        /// Gate de confluencia HTF: exige al menos una estructura activa TF≥60 cuya (score*freshness)
+        /// supere un umbral adaptativo basado en la mediana local y ajustado por volatilidad y bias.
+        /// </summary>
+        private bool HasHighTimeframeConfluence(int decisionTF, int decisionIdx, string action, double entryPrice)
+        {
+            var now = _provider.GetBarTime(decisionTF, decisionIdx);
+            var htfs = new[] { 60, 240, 1440 }.Where(tf => _structuresListByTF.ContainsKey(tf)).ToArray();
+            var samples = new List<double>();
+
+            foreach (var tf in htfs)
+            {
+                int idxTF = _provider.GetBarIndexFromTime(tf, now);
+                if (idxTF < 0) continue;
+                double atrTF = Math.Max(1e-9, _provider.GetATR(tf, 14, idxTF));
+
+                var active = _structuresListByTF[tf]
+                    .Where(s => s.IsActive && s.LastUpdatedBarIndex <= idxTF)
+                    .Select(s =>
+                    {
+                        int age = Math.Max(0, idxTF - s.LastUpdatedBarIndex);
+                        double fresh;
+                        if (_config.FreshnessNoDecayForUnbrokenSwings && s is SwingInfo sw3 && !sw3.IsBroken)
+                        {
+                            fresh = 1.0;
+                            if (_config.EnablePerfDiagnostics)
+                                _logger.Info($"[FRESH_ADAPT] TF={tf} Type=SWING age={age} fresh=1.00 reason=UnbrokenSwing");
+                        }
+                        else
+                        {
+                            fresh = CalculateFreshness(age, tf, idxTF);
+                        }
+                        double adj = s.Score * fresh;
+                        // proximidad direccional: para BUY apoyo por debajo, para SELL resistencia por encima
+                        double anchor = (action == "BUY") ? s.Low : s.High;
+                        double distATR = Math.Abs(anchor - entryPrice) / atrTF;
+                        // penaliza estructuras muy alejadas
+                        double proxWeight = 1.0 / (1.0 + distATR);
+                        return adj * proxWeight;
+                    })
+                    .ToList();
+
+                if (active.Count > 0)
+                    samples.AddRange(active);
+            }
+
+            if (samples.Count == 0)
+                return false; // sin confluencia disponible
+
+            // Mediana local
+            var ordered = samples.OrderBy(x => x).ToList();
+            double median = ordered[samples.Count / 2];
+
+            // Ajuste adaptativo por vol y bias
+            double vol = GetVolFactor(60, decisionIdx);
+            double biasAdj = 1.0;
+            if (!string.IsNullOrEmpty(_currentMarketBias))
+            {
+                bool biasWith = (_currentMarketBias == "Bullish" && action == "BUY") || (_currentMarketBias == "Bearish" && action == "SELL");
+                biasAdj = biasWith ? 0.9 : 1.1; // relaja si bias a favor, endurece si en contra
+            }
+            double volAdj = vol > 1.1 ? 0.95 : (vol < 0.9 ? 1.05 : 1.0);
+            double threshold = Math.Max(0.05, median * biasAdj * volAdj); // suelo para evitar thr≈0
+
+            bool ok = samples.Any(x => x >= threshold);
+            _logger?.Info($"[HTF_CONFL] samples={samples.Count} median={median:F3} biasAdj={biasAdj:F2} volAdj={volAdj:F2} thr={threshold:F3} ok={ok}");
+            // Traza de diagnóstico robusta para el analizador
+            _logger?.Info($"[DIAGNOSTICO][HTF] CONFL: median={median:F3} thr={threshold:F3} ok={ok}");
+            return ok;
+        }
+
+        // ============================================================================
+        // BIAS COMPUESTO RÁPIDO (EMA20/50 aproximadas, BOS reciente, regresión 24h)
+        // ============================================================================
+        private (string dir, double score) GetFastCompositeBias(int decisionTF, int decisionIdx)
+        {
+            // Tiempo de referencia (corte temporal)
+            DateTime now = _provider.GetBarTime(decisionTF, decisionIdx);
+            int idx60 = _provider.GetBarIndexFromTime(60, now);
+            if (idx60 < 0)
+            {
+                _logger?.Info($"[BIAS_FAST] idx60=-1 vol={GetVolFactor(60, Math.Max(0, decisionIdx)):F2} score=0.00 dir=Neutral");
+                return ("Neutral", 0.0);
+            }
+
+            // Componentes:
+            // 1) "EMA20" y "EMA50" aproximadas vía diferencias de SMA simple (close vs N-barras-atrás)
+            double closeNow = _provider.GetClose(60, idx60);
+            double sma20Prev = 0.0, sma50Prev = 0.0, sma20Curr = 0.0, sma50Curr = 0.0;
+            int p20 = 20, p50 = 50;
+            if (idx60 >= p50 + 1)
+            {
+                double sum20prev = 0.0, sum20curr = 0.0;
+                for (int i = 1; i <= p20; i++) sum20prev += _provider.GetClose(60, idx60 - i);
+                for (int i = 0; i < p20; i++) sum20curr += _provider.GetClose(60, idx60 - i);
+                sma20Prev = sum20prev / p20; sma20Curr = sum20curr / p20;
+
+                double sum50prev = 0.0, sum50curr = 0.0;
+                for (int i = 1; i <= p50; i++) sum50prev += _provider.GetClose(60, idx60 - i);
+                for (int i = 0; i < p50; i++) sum50curr += _provider.GetClose(60, idx60 - i);
+                sma50Prev = sum50prev / p50; sma50Curr = sum50curr / p50;
+            }
+            double ema20Slope = sma20Curr - sma20Prev;
+            double ema50Slope = sma50Curr - sma50Prev;
+
+            // 2) BOS recientes (últimas 24h ≈ 24 barras 60m)
+            int windowBars = 24;
+            int fromIdx = Math.Max(0, idx60 - windowBars + 1);
+            int bosBull = 0, bosBear = 0;
+            if (_structuresListByTF.ContainsKey(60))
+            {
+                foreach (var sb in _structuresListByTF[60].OfType<StructureBreakInfo>())
+                {
+                    if (!sb.IsActive) continue;
+                    if (sb.CreatedAtBarIndex > idx60 || sb.CreatedAtBarIndex < fromIdx) continue;
+                    if (sb.Direction == "Bullish") bosBull++;
+                    else if (sb.Direction == "Bearish") bosBear++;
+                }
+            }
+            double bosScore = 0.0;
+            int bosTot = bosBull + bosBear;
+            if (bosTot > 0) bosScore = (bosBull - bosBear) / (double)bosTot;
+
+            // 3) Regresión 24h (slope aproximado: cierre ahora vs cierre hace 24h)
+            double regScore = 0.0;
+            DateTime t24h = now.AddHours(-24);
+            int idx24 = _provider.GetBarIndexFromTime(60, t24h);
+            if (idx24 >= 0 && idx60 > idx24)
+            {
+                double close24 = _provider.GetClose(60, idx24);
+                regScore = closeNow - close24;
+            }
+
+            // Normalización por ATR para componentes de precio
+            double atr60 = Math.Max(1e-9, _provider.GetATR(60, 14, idx60));
+            double ema20Norm = ema20Slope / atr60;
+            double ema50Norm = ema50Slope / atr60;
+            double regNorm = regScore / atr60;
+
+            // Volatilidad para deadband adaptativo
+            double vol = GetVolFactor(60, idx60);
+
+            // Ponderación (como en el plan: 30/25/25/20)
+            double score =
+                0.30 * ema20Norm +
+                0.25 * ema50Norm +
+                0.25 * bosScore +
+                0.20 * regNorm;
+
+            // Umbral adaptativo pequeño (deadband) por volatilidad
+            // Más estricto en baja vol (deadband mayor), más permisivo en alta vol
+            double deadband = Math.Min(0.15, Math.Max(0.05, 0.10 * (1.0 / Math.Max(1e-9, vol))));
+            string dir = "Neutral";
+            if (score > deadband) dir = "Bullish";
+            else if (score < -deadband) dir = "Bearish";
+
+            _logger?.Info($"[BIAS_FAST] idx60={idx60} ema20N={ema20Norm:F3} ema50N={ema50Norm:F3} bos={bosScore:F3} regN={regNorm:F3} dead={deadband:F3} vol={vol:F2} score={score:F3} dir={dir}");
+            // Emisión simple adicional para el analizador (robusto a cambios de formato)
+            _logger?.Info($"[BIAS_FAST] score={score:F3} dir={dir}");
+            // Traza de diagnóstico bajo etiqueta DIAGNOSTICO
+            _logger?.Info($"[DIAGNOSTICO][Bias] FAST: score={score:F3} dir={dir}");
+            return (dir, score);
+        }
+        
         /// <summary>
         /// Calcula el factor de frescura (freshness) basado en la edad de la estructura
+        /// Adaptativo por TF y volatilidad del mercado
         /// </summary>
-        private double CalculateFreshness(int age, int tfMinutes)
+        private double CalculateFreshness(int age, int tfMinutes, int barIndex)
         {
-            // Freshness decay exponencial
-            // Zonas recientes (< 10 barras) = 1.0
-            // Zonas viejas (> 100 barras) = ~0.1
-            int decayPeriod = 50; // Default: 50 barras
-            double freshness = Math.Exp(-age / (double)decayPeriod);
+            // 1) Periodo base por TF (configurable)
+            int baseDecayPeriod = tfMinutes switch
+            {
+                5 => _config.DecayBasePeriod_5m,
+                15 => _config.DecayBasePeriod_15m,
+                60 => _config.DecayBasePeriod_60m,
+                240 => _config.DecayBasePeriod_240m,
+                1440 => _config.DecayBasePeriod_1440m,
+                _ => 50
+            };
+            
+            // 2) Ajuste por volatilidad normalizada con clamp simétrico
+            double vol = GetVolatilityFactor(tfMinutes, barIndex);
+            double vmax = Math.Max(1.0, _config.DecayVolatilityMultiplier);
+            double vmin = 1.0 / vmax;
+            double volAdj = Math.Min(vmax, Math.Max(vmin, vol));
+            
+            int effectiveDecayPeriod = Math.Max(1, (int)Math.Round(baseDecayPeriod * volAdj));
+            
+            // 3) Decaimiento exponencial con suelo mínimo
+            double freshness = Math.Exp(-age / (double)effectiveDecayPeriod);
+            
+            // Logging diagnóstico para estructuras viejas
+            if (_config.EnablePerfDiagnostics && age > baseDecayPeriod)
+            {
+                _logger.Debug($"[FRESH] TF={tfMinutes} Age={age} Base={baseDecayPeriod} VolAdj={volAdj:F2} Effective={effectiveDecayPeriod} Fresh={freshness:F3}");
+            }
+            
             return Math.Max(0.01, freshness); // Mínimo 1%
+        }
+
+        // ============================================================================
+        // V6.1d: HELPERS ADAPTATIVOS DE TIMING (sin hardcodes)
+        // ============================================================================
+        
+        /// <summary>
+        /// V6.1d: Verifica approach adaptativo (distancia decreciente con parámetros dinámicos)
+        /// </summary>
+        private bool IsApproachingEntryAdaptive(int tf, int idx, string action, double entryPrice)
+        {
+            double vol = GetVolFactor(60, idx);
+            int baseLb = _config.ApproachLookbackBars_Base;
+            int lookback = Math.Max(2, (int)Math.Round(baseLb * Math.Min(1.5, Math.Max(0.7, 1.0 / vol))));
+            double epsATR = _config.ApproachEpsilonATR_Base * Math.Min(1.5, Math.Max(0.7, vol));
+            
+            double atr = _provider.GetATR(tf, 14, idx);
+            if (atr <= 0) return false;
+            
+            var seq = new List<double>();
+            int start = Math.Max(0, idx - lookback + 1);
+            for (int i = start; i <= idx; i++)
+            {
+                double close = _provider.GetClose(tf, i);
+                seq.Add(Math.Abs(close - entryPrice) / atr);
+            }
+            
+            if (seq.Count < 2) return false;
+            
+            // Regla A: ventana corta de proximidad (no empeorar)
+            // K adaptativo: 2..5 barras según volatilidad (alta vol -> K menor)
+            int transitions = seq.Count - 1;
+            int K = Math.Max(2, Math.Min(5, (int)Math.Round(3.0 * Math.Max(0.7, Math.Min(1.5, vol))))); // clamp vía vol
+            int worsen = 0;
+            for (int i = transitions - Math.Min(transitions, K) + 1; i <= transitions; i++)
+            {
+                if (i <= 0) continue;
+                // empeora si distancia aumenta al menos epsATR
+                if (seq[i] - seq[i - 1] >= epsATR) worsen++;
+            }
+            bool windowPass = (worsen == 0);
+            _logger?.Info($"[APPROACH_WINDOW] TF={tf} Bar={idx} K={K} worsen={worsen} pass={windowPass}");
+            if (windowPass)
+                return true;
+
+            int improvements = 0;
+            for (int i = 1; i < seq.Count; i++)
+                if (seq[i - 1] - seq[i] >= epsATR) improvements++;
+            // Requisito base adaptativo: en alta vol exigir menos transiciones, en baja vol más
+            double p = 0.65; // valor intermedio por defecto
+            if (vol >= 1.1) p = 0.5;
+            else if (vol <= 0.9) p = 0.8;
+            int required = Math.Max(1, (int)Math.Ceiling(transitions * p));
+
+            // Regla B: si hay confluencia HTF y BiasFast a favor, relajar aún más p
+            bool ctxBoost = false;
+            try
+            {
+                bool htfOK = HasHighTimeframeConfluence(tf, idx, action, entryPrice);
+                var bf = GetFastCompositeBias(tf, idx);
+                bool biasWith = (bf.dir == "Bullish" && action == "BUY") || (bf.dir == "Bearish" && action == "SELL");
+                if (htfOK && biasWith)
+                {
+                    double pOld = p;
+                    p = Math.Min(p, 0.5); // relaja al tope inferior
+                    required = Math.Max(1, (int)Math.Ceiling(transitions * p));
+                    ctxBoost = true;
+                    _logger?.Info($"[APPROACH_CTX_BOOST] TF={tf} Bar={idx} p_old={pOld:F2} p_new={p:F2} required={required} htfOK={htfOK} bias={bf.dir}");
+                }
+            }
+            catch { /* best-effort */ }
+
+            bool ok = improvements >= required;
+            _logger?.Info($"[APPROACH_ADAPT] TF={tf} Bar={idx} vol={vol:F2} lb={lookback} epsATR={epsATR:F3} improv={improvements}/{transitions} req={required} ok={ok}");
+            return ok;
+        }
+
+        /// <summary>
+        /// V6.1d: Momentum adaptativo por TF y volatilidad
+        /// </summary>
+        private bool IsLocalMomentumAlignedAdaptive(int tf, int idx, string action)
+        {
+            double vol = GetVolFactor(60, idx);
+            int basePeriod = tf switch 
+            { 
+                5 => _config.MomentumPeriod_5m, 
+                15 => _config.MomentumPeriod_15m, 
+                60 => _config.MomentumPeriod_60m, 
+                _ => 5 
+            };
+            int period = Math.Max(2, (int)Math.Round(basePeriod * Math.Min(1.5, Math.Max(0.7, 1.0 / vol))));
+            
+            if (idx < 1) return false;
+            
+            // Calcular SMA manualmente
+            double prevSum = 0.0, currSum = 0.0;
+            try
+            {
+                for (int i = 0; i < period; i++)
+                {
+                    prevSum += _provider.GetClose(tf, idx - 1 - i);
+                    currSum += _provider.GetClose(tf, idx - i);
+                }
+            }
+            catch { return false; }
+            
+            double prev = prevSum / period;
+            double curr = currSum / period;
+            
+            if (prev <= 0 || curr <= 0) return false;
+            
+            double slope = curr - prev;
+            return action == "BUY" ? (slope > 0) : (slope < 0);
+        }
+
+        /// <summary>
+        /// V6.1d: Confirmación de vela adaptativa por volatilidad
+        /// </summary>
+        private bool IsCandleConfirmingAdaptive(int tf, int idx, string action)
+        {
+            double open = _provider.GetOpen(tf, idx);
+            double close = _provider.GetClose(tf, idx);
+            double high = _provider.GetHigh(tf, idx);
+            double low = _provider.GetLow(tf, idx);
+            
+            double range = Math.Max(1e-9, high - low);
+            double body = Math.Abs(close - open);
+            double wick = action == "BUY" ? (open - low) : (high - open);
+            
+            double vol = GetVolFactor(60, idx);
+            double bodyRatio = _config.CandleBodyRatioBase * Math.Min(1.3, Math.Max(0.8, 1.0 / vol));
+            double wickRatio = _config.CandleWickRatioBase * Math.Min(1.3, Math.Max(0.8, vol));
+            
+            bool strongBody = body > range * bodyRatio;
+            bool strongWick = wick > body * wickRatio;
+            
+            return strongBody || strongWick;
+        }
+
+        /// <summary>
+        /// V6.1d: Timing confirmado adaptativo con N-de-3 dinámico
+        /// </summary>
+        private bool IsTimingConfirmedAdaptive(int tf, int idx, string action, double entryPrice, string bias = null)
+        {
+            bool approach = IsApproachingEntryAdaptive(tf, idx, action, entryPrice);
+            bool momentum = IsLocalMomentumAlignedAdaptive(tf, idx, action);
+            bool candle = IsCandleConfirmingAdaptive(tf, idx, action);
+            
+            int score = (approach ? 1 : 0) + (momentum ? 1 : 0) + (candle ? 1 : 0);
+            
+            // N-de-3 requerido, ajustado por contexto (vol y bias)
+            int required = _config.TimingConfirmationRequired_Base;
+            double vol = GetVolFactor(60, idx);
+            if (vol < 0.9 && (bias == null || bias == "Neutral")) required = Math.Max(required, 3);
+            if (vol > 1.1 && (bias != null && bias != "Neutral")) required = Math.Min(required, 2);
+            
+            bool timingOK = score >= required;
+            
+            _logger?.Info($"[TIMING_ADAPT] TF={tf} Bar={idx} vol={vol:F2} approach={approach} momentum={momentum} candle={candle} score={score}/{required} ok={timingOK}");
+            
+            return timingOK;
+        }
+        
+        /// <summary>
+        /// DEPRECATED: Mantener para compatibilidad, redirige a IsTimingConfirmedAdaptive
+        /// </summary>
+        private bool IsTimingConfirmed(int tf, int idx, string action, double entryPrice)
+        {
+            return IsTimingConfirmedAdaptive(tf, idx, action, entryPrice, _currentMarketBias);
         }
 
         /// <summary>
@@ -2400,6 +3227,39 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         // ========================================================================
         // MANTENIMIENTO Y PURGA INTELIGENTE (FASE 9)
         // ========================================================================
+        
+        /// <summary>
+        /// Determina si una estructura debe protegerse contra purga
+        /// Criterios: proximity razonable (potencial S/R), score residual bueno, TF alto
+        /// </summary>
+        private bool IsStructureProtectedForPurge(StructureBase structure, int tfMinutes, int currentBar)
+        {
+            // 0) Swings NO rotos: protección absoluta (S/R histórico válido)
+            if (structure is SwingInfo swingInfo && !swingInfo.IsBroken)
+                return true;
+            
+            // 1) Swings/zonas con proximity razonable (potencial S/R)
+            double currentPrice = _provider.GetClose(tfMinutes, currentBar);
+            double entryPrice =
+                structure is SwingInfo sw ? (sw.Type == "SwingHigh" ? sw.High : sw.Low)
+                : (structure.High + structure.Low) * 0.5;
+            
+            double atr = _provider.GetATR(tfMinutes, 14, currentBar);
+            double distanceATR = (atr > 0) ? (Math.Abs(currentPrice - entryPrice) / atr) : double.PositiveInfinity;
+            
+            if (distanceATR < (_config.ProximityThresholdATR * _config.PurgeProtection_ProximityFactor))
+                return true;
+            
+            // 2) Score aún razonable (no ha decaído totalmente)
+            if (structure.Score > _config.MinScoreThreshold * _config.PurgeProtection_ScoreFactor)
+                return true;
+            
+            // 3) TF alto con score mínimo (estructuras de TF alto más valiosas)
+            if (structure.TF >= 240 && structure.Score > _config.MinScoreThreshold)
+                return true;
+            
+            return false;
+        }
 
         /// <summary>
         /// Calcula la edad máxima en BARRAS según el TF de la estructura
@@ -2439,11 +3299,16 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 int currentBar = barIndex; // Usar el índice de la barra siendo procesada, no el último disponible
                 
                 // 1. Purga por score mínimo (prioridad alta)
-                // Purgar TODAS las estructuras con score bajo (sin importar estado)
-                // Una estructura con score < threshold no aporta valor al sistema
+                // Purgar estructuras con score bajo EXCEPTO las protegidas (S/R potenciales)
                 var lowScoreStructures = structures
-                    .Where(s => s.Score < _config.MinScoreThreshold)
+                    .Where(s => s.Score < _config.MinScoreThreshold && !IsStructureProtectedForPurge(s, tfMinutes, currentBar))
                     .ToList();
+                
+                int protectedLowScore = structures.Count(s => s.Score < _config.MinScoreThreshold) - lowScoreStructures.Count;
+                if (protectedLowScore > 0 && _config.EnablePerfDiagnostics)
+                {
+                    _logger.Info($"[PURGE][PROTECT] TF={tfMinutes} Protected={protectedLowScore} from score purge");
+                }
 
                 if (lowScoreStructures.Count > 0)
                 {
@@ -2474,10 +3339,18 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 }
 
                 // 2. Purga por edad (estructuras muy antiguas) - PONDERADA POR TF
+                // NOTA: Swings se excluyen si EnableAgePurgeForSwings = false (por defecto)
                 int maxAgeBarsForThisTF = GetMaxAgeBarsForTF(tfMinutes);
                 var oldStructures = structures
-                    .Where(s => (currentBar - s.CreatedAtBarIndex) > maxAgeBarsForThisTF)
+                    .Where(s => !(s is SwingInfo) || _config.EnableAgePurgeForSwings)  // Swings solo si flag activo
+                    .Where(s => (currentBar - s.CreatedAtBarIndex) > maxAgeBarsForThisTF && !IsStructureProtectedForPurge(s, tfMinutes, currentBar))
                     .ToList();
+                
+                int protectedOld = structures.Count(s => (currentBar - s.CreatedAtBarIndex) > maxAgeBarsForThisTF) - oldStructures.Count;
+                if (protectedOld > 0 && _config.EnablePerfDiagnostics)
+                {
+                    _logger.Info($"[PURGE][PROTECT] TF={tfMinutes} Protected={protectedOld} from age purge (>{maxAgeBarsForThisTF} bars)");
+                }
 
                 if (oldStructures.Count > 0)
                 {
@@ -2513,7 +3386,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 }
 
                 // 3. Purga por límite de tipo (granular)
-                PurgeByTypeLimit(tfMinutes);
+                PurgeByTypeLimit(tfMinutes, currentBar);
 
                 // 4. Purga por límite global (si aún se excede)
                 structures = _structuresListByTF[tfMinutes]; // Refrescar después de purgas anteriores
@@ -2525,17 +3398,33 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     {
                         int countToPurge = structures.Count - _config.MaxStructuresPerTF;
                         
-                        // Purgar las estructuras con score más bajo (determinista)
-                        var toRemove = structures
+                        // Purgar primero no-protegidas, luego protegidas si es necesario (determinista)
+                        var ordered = structures
                             .OrderBy(s => s.Score)
-                            .ThenBy(s => s.TF)                        // TF más bajo primero
-                            .ThenByDescending(s => s.CreatedAtBarIndex) // Más antiguo primero
-                            .ThenByDescending(s => s.StartTime)       // Más antiguo por tiempo
+                            .ThenBy(s => s.TF)
+                            .ThenByDescending(s => s.CreatedAtBarIndex)
+                            .ThenByDescending(s => s.StartTime)
                             .ThenBy(s => s.Low)
                             .ThenBy(s => s.High)
                             .ThenBy(s => s.Type, StringComparer.Ordinal)
-                            .Take(countToPurge)
                             .ToList();
+                        
+                        var nonProtected = ordered.Where(s => !IsStructureProtectedForPurge(s, tfMinutes, currentBar)).ToList();
+                        var protectedList = ordered.Where(s => IsStructureProtectedForPurge(s, tfMinutes, currentBar)).ToList();
+                        
+                        var toRemove = new List<StructureBase>();
+                        toRemove.AddRange(nonProtected.Take(countToPurge));
+                        
+                        if (toRemove.Count < countToPurge)
+                        {
+                            int rest = countToPurge - toRemove.Count;
+                            toRemove.AddRange(protectedList.Take(rest));
+                            
+                            if (rest > 0 && _config.EnablePerfDiagnostics)
+                            {
+                                _logger.Info($"[PURGE][PROTECT] TF={tfMinutes} Forced purge of {rest} protected structures (global limit)");
+                            }
+                        }
 
                         foreach (var structure in toRemove)
                         {
@@ -2569,7 +3458,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// Purga estructuras por límite de tipo
         /// Cada tipo de estructura tiene su propio límite máximo
         /// </summary>
-        private void PurgeByTypeLimit(int tfMinutes)
+        private void PurgeByTypeLimit(int tfMinutes, int barIndex)
         {
             var structures = _structuresListByTF[tfMinutes];
 
@@ -2586,17 +3475,33 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 {
                     int countToPurge = count - maxForType;
 
-                    // Purgar las estructuras con score más bajo de este tipo (determinista)
-                    var toRemove = group
+                    // Purgar primero no-protegidas, luego protegidas si es necesario (determinista)
+                    var ordered = group
                         .OrderBy(s => s.Score)
-                        .ThenBy(s => s.TF)                        // TF más bajo primero
-                        .ThenByDescending(s => s.CreatedAtBarIndex) // Más antiguo primero
-                        .ThenByDescending(s => s.StartTime)       // Más antiguo por tiempo
+                        .ThenBy(s => s.TF)
+                        .ThenByDescending(s => s.CreatedAtBarIndex)
+                        .ThenByDescending(s => s.StartTime)
                         .ThenBy(s => s.Low)
                         .ThenBy(s => s.High)
                         .ThenBy(s => s.Type, StringComparer.Ordinal)
-                        .Take(countToPurge)
                         .ToList();
+                    
+                    var nonProtected = ordered.Where(s => !IsStructureProtectedForPurge(s, tfMinutes, barIndex)).ToList();
+                    var protectedList = ordered.Where(s => IsStructureProtectedForPurge(s, tfMinutes, barIndex)).ToList();
+                    
+                    var toRemove = new List<StructureBase>();
+                    toRemove.AddRange(nonProtected.Take(countToPurge));
+                    
+                    if (toRemove.Count < countToPurge)
+                    {
+                        int rest = countToPurge - toRemove.Count;
+                        toRemove.AddRange(protectedList.Take(rest));
+                        
+                        if (rest > 0 && _config.EnablePerfDiagnostics)
+                        {
+                            _logger.Info($"[PURGE][PROTECT] TF={tfMinutes} Type={type} Forced purge of {rest} protected structures (type limit)");
+                        }
+                    }
 
                     _stateLock.EnterWriteLock();
                     try

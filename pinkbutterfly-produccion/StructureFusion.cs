@@ -131,15 +131,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             var heatZones = new List<HeatZone>();
             var assignedTriggers = new HashSet<string>();
 
-            // Ordenar Triggers por score descendente (mejores primero) + desempates deterministas
-            triggers = triggers
-                .OrderByDescending(s => s.Score)
-                .ThenByDescending(s => s.TF)
-                .ThenBy(s => s.CreatedAtBarIndex)
-                .ThenBy(s => s.StartTime)
-                .ThenBy(s => s.Low)
-                .ThenBy(s => s.High)
-                .ToList();
+            // NO ordenar - preservar secuencia temporal de inserción (Fase 1)
+            // triggers ya vienen ordenados temporalmente desde AddRange(structures)
 
             int sfBull = 0, sfBear = 0, sfNeutral = 0, sfWithAnchors = 0;
             foreach (var trigger in triggers)

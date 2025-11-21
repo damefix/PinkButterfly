@@ -2064,7 +2064,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             {
                 var bestAny = anyFiltered.First();
                 _logger.Info(string.Format(
-                    "[RISK][TP_POLICY] Zone={0} P0_ANY_DIR: ZoneId={1} Dir={2} TF={3} Score={4:F2} RR={5:F2} DistATR={6:F2} TP={7:F2} ATR={8:F2} Cap={9:F2}",
+                    "[RISK][TP_POLICY] Zone={0} P0_ANY_DIR: ZoneId={1} Dir={2} TF={3} Score={4:F2} RR={5:F2} DistATR={6:F2} TP={7:F2} ATR={8:F2}",
                     zone.Id, bestAny.Zone.Id, bestAny.Zone.Direction, bestAny.Zone.TFDominante,
                     bestAny.Score, bestAny.RR, bestAny.DistanceATR, bestAny.TP, bestAny.ATRz
                 ));
@@ -2414,6 +2414,119 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 0.15 * recencyScore;        // Recencia
             
             return finalScore;
+        }
+        
+        // ============================================================================
+        // V6.1d-FINAL: MÉTODO STATELESS PARA SL MULTI-CANDIDATO
+        // ============================================================================
+        
+        /// <summary>
+        /// V6.1d: Método stateless para selección de SL multi-candidato
+        /// Recibe candidatos ya generados, aplica caps dinámicos, elige mejor por R:R
+        /// </summary>
+        public RiskResult CalculateRisk(
+            string action,
+            double entry,
+            double tp,
+            IList<double> slCandidates,
+            double volFactor,
+            double minRR,
+            int decisionTF,
+            int decisionIdx,
+            double atrDec)
+        {
+            if (slCandidates == null || slCandidates.Count == 0)
+                return RiskResult.Reject("NO_SL_CANDIDATES");
+            
+            // Caps dinámicos por volatilidad
+            double maxSL_pts = _config.MaxSLDistancePoints_NormalBase * volFactor;
+            double maxSL_atr = _config.MaxSLDistanceATR_Base * volFactor;
+            double maxTP_pts = _config.MaxTPDistancePoints_NormalBase * volFactor;
+            // Piso adaptativo de SL en ATR (evita SL irreales “a un tick”)
+            // Más alto en baja volatilidad; más permisivo en alta volatilidad
+            double minSL_atr = Math.Min(0.8, Math.Max(0.25, 0.45 * (1.0 / Math.Max(1e-9, volFactor))));
+            
+            // Validar TP cap
+            double tpPts = Math.Abs(tp - entry);
+            if (tpPts > maxTP_pts)
+            {
+                _logger?.Info($"[RC_TP_CAP_FAIL] tpPts={tpPts:F2} > cap={maxTP_pts:F1}");
+                return RiskResult.Reject("TP_CAP_FAIL");
+            }
+            
+            // Filtrar y evaluar candidatos SL
+            var kept = new List<(double SL, double RR, double SlATR, double SlPts)>();
+            foreach (var sl in slCandidates)
+            {
+                double slPts = Math.Abs(sl - entry);
+                double slATR = slPts / Math.Max(1e-9, atrDec);
+                
+                // Cap en puntos OR cap en ATR (cualquiera válido)
+                bool capOK = (slPts <= maxSL_pts) || (slATR <= maxSL_atr);
+                if (!capOK) continue;
+                // Piso adaptativo de SL (evita inflado de RR por SL microscópico)
+                if (slATR + 1e-12 < minSL_atr)
+                {
+                    _logger?.Debug($"[RC_SL_MINFLOOR] slATR={slATR:F2} < minSL_atr={minSL_atr:F2} (filtrado)");
+                    continue;
+                }
+                
+                // R:R mínimo
+                double rr = tpPts / Math.Max(1e-9, slPts);
+                if (rr + 1e-9 < minRR) continue;
+                
+                kept.Add((sl, rr, slATR, slPts));
+            }
+            
+            if (kept.Count == 0)
+            {
+                _logger?.Info($"[RC_SL_FAIL] vol={volFactor:F2} capPts={maxSL_pts:F1} capATR={maxSL_atr:F2} minRR={minRR:F2} → no hay SL válido");
+                return RiskResult.Reject("SL_CHECK_FAIL_NO_CAND");
+            }
+            
+            // Elegir mejor: mayor R:R, desempate por menor SlATR (mejor fill)
+            var best = kept.OrderByDescending(k => k.RR).ThenBy(k => k.SlATR).First();
+            
+            _logger?.Info($"[RC_SL_PICK] vol={volFactor:F2} RR={best.RR:F2} slPts={best.SlPts:F1} slATR={best.SlATR:F2} capPts={maxSL_pts:F1} capATR={maxSL_atr:F2}");
+            _logger?.Info($"[DIAGNOSTICO][Risk] SL_SELECTED: Zone=NA Type=NA Score=0.00 TF=-1 DistATR={best.SlATR:F2} Age=0 Price={best.SL:F2} Reason=RC_SL_PICK");
+            
+            return RiskResult.Accept(best.SL, tp, best.RR);
+        }
+    }
+    
+    // ============================================================================
+    // V6.1d-FINAL: RISKRESULT (RESULTADO DE CÁLCULO DE RIESGO)
+    // ============================================================================
+    
+    /// <summary>
+    /// Resultado del cálculo de riesgo (stateless)
+    /// </summary>
+    public sealed class RiskResult
+    {
+        public bool Accepted { get; private set; }
+        public string Reason { get; private set; }
+        public double SL { get; private set; }
+        public double TP { get; private set; }
+        public double RR { get; private set; }
+        
+        public static RiskResult Accept(double sl, double tp, double rr) 
+        {
+            return new RiskResult 
+            { 
+                Accepted = true, 
+                SL = sl, 
+                TP = tp, 
+                RR = rr 
+            };
+        }
+        
+        public static RiskResult Reject(string reason) 
+        {
+            return new RiskResult 
+            { 
+                Accepted = false, 
+                Reason = reason ?? "REJECT" 
+            };
         }
     }
 }

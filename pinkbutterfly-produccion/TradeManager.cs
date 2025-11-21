@@ -104,6 +104,9 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         private int _replayLowRRCount = 0;
         private int _replayConcurrencyCount = 0;
         private int _replayLastProgressBar = -1;
+        
+        // V6.1d: Rolling resultados de ejecutadas para WR adaptativo
+        private readonly Queue<bool> _recentResults = new Queue<bool>();
 
         public bool HasActiveTrackingWindows()
         {
@@ -162,7 +165,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// <summary>
         /// Registra una nueva orden Limit
         /// </summary>
-        public void RegisterTrade(string action, double entry, double sl, double tp, int entryBar, DateTime entryBarTime, int tfDominante, string sourceStructureId, double currentPrice, double distanceToEntryATR = -1.0, string currentRegime = "Normal", double structureScore = 0.0)
+        public void RegisterTrade(string action, double entry, double sl, double tp, int entryBar, DateTime entryBarTime, int tfDominante, string sourceStructureId, double currentPrice, double distanceToEntryATR = -1.0, string currentRegime = "Normal", double structureScore = 0.0, double volatilityFactor = 1.0)
         {
             // LOG DE ENTRADA: Contar TODAS las llamadas a RegisterTrade
             _logger?.Info($"[TRADE][REGISTER_ATTEMPT] Bar={entryBar} {action} @{entry:F2} SL={sl:F2} TP={tp:F2} Zone={sourceStructureId} DistATR={distanceToEntryATR:F2}");
@@ -217,15 +220,21 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 return;
             }
             // ========================================================================
-            // Gate adicional: Cap de TP por puntos (evitar objetivos "de swing" en intradía)
+            // V6.1d: Cap de TP dinámico por volatilidad
             double tpDistancePts = Math.Abs(tp - entry);
-            double maxTpPoints = isHighVol ? _config.MaxTPDistancePoints_HighVol : _config.MaxTPDistancePoints_Normal;
+            double maxTpPointsBase = isHighVol ? _config.MaxTPDistancePoints_HighVol : _config.MaxTPDistancePoints_NormalBase;
+            double volFactor = Math.Min(_config.VolFactorMax, Math.Max(_config.VolFactorMin, volatilityFactor));
+            double maxTpPoints = maxTpPointsBase * volFactor;
             if (tpDistancePts > maxTpPoints * (1.0 + _config.ValidationTolerancePercent))
             {
                 _replayTpTooFarCount++;
                 int pendingCount = _trades.Count(t => t.Status == TradeStatus.PENDING);
                 int executedCount = _trades.Count(t => t.Status == TradeStatus.EXECUTED);
-                _logger.Info($"[TRADE][REJECT_TP_TOO_FAR] Bar={entryBar} TPDist={tpDistancePts:F2}pts > Cap={maxTpPoints:F2}pts (+{_config.ValidationTolerancePercent:P0}) | State: PENDING={pendingCount} EXECUTED={executedCount}");
+                _logger.Info($"[TRADE][REJECT_TP_TOO_FAR] Bar={entryBar} TPDist={tpDistancePts:F2}pts > Cap={maxTpPoints:F2}pts (base={maxTpPointsBase:F2} vol={volFactor:F2}) | State: PENDING={pendingCount} EXECUTED={executedCount}");
+                if (_config.EnablePerfDiagnostics)
+                {
+                    _logger?.Debug($"[ADAPTIVE_LIMITS] vol={volFactor:F2} TPcap={maxTpPoints:F1}pts");
+                }
                 PrintReplaySummary(entryBar);
                 return;
             }
@@ -244,12 +253,19 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 double tpDist = Math.Max(0.0, entry - tp);
                 rrPlanned = tpDist / slDist;
             }
-            if (rrPlanned < 1.30)
+            // V6.1d: R:R mínimo adaptativo basado en WR reciente
+            double minRR = GetAdaptiveMinRR();
+            if (rrPlanned < minRR)
             {
                 _replayLowRRCount++;
                 int pendingCount = _trades.Count(t => t.Status == TradeStatus.PENDING);
                 int executedCount = _trades.Count(t => t.Status == TradeStatus.EXECUTED);
-                _logger.Info($"[TRADE][REJECT_LOW_RR] Bar={entryBar} RR={rrPlanned:F2} < 1.30 | State: PENDING={pendingCount} EXECUTED={executedCount}");
+                _logger.Info($"[TRADE][REJECT_LOW_RR] Bar={entryBar} RR={rrPlanned:F2} < MinRR={minRR:F2} | State: PENDING={pendingCount} EXECUTED={executedCount}");
+                if (_config.EnablePerfDiagnostics)
+                {
+                    double wr = GetRecentWinRate(_config.RecentWR_Window);
+                    _logger?.Debug($"[ADAPTIVE_RR] recentWR={wr:F2} minRR={minRR:F2}");
+                }
                 PrintReplaySummary(entryBar);
                 return;
             }
@@ -564,6 +580,10 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                         trade.ExitReason = "SL";
                         slHitNow++; // V6.0n
                         
+                        // V6.1d: Alimentar WR rolling (loss)
+                        _recentResults.Enqueue(false);
+                        while (_recentResults.Count > Math.Max(10, _config.RecentWR_Window)) _recentResults.Dequeue();
+                        
                         // Validación de TIME_ANOMALY (V6.0m)
                         if (trade.ExitBarTime < trade.EntryBarTime)
                         {
@@ -582,6 +602,10 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                         trade.ExitBarTime = currentBarTime;
                         trade.ExitReason = "TP";
                         tpHitNow++; // V6.0n
+                        
+                        // V6.1d: Alimentar WR rolling (win)
+                        _recentResults.Enqueue(true);
+                        while (_recentResults.Count > Math.Max(10, _config.RecentWR_Window)) _recentResults.Dequeue();
                         
                         // Validación de TIME_ANOMALY (V6.0m)
                         if (trade.ExitBarTime < trade.EntryBarTime)
@@ -1094,6 +1118,34 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             {
                 return -1.0; // Error al calcular
             }
+        }
+        
+        // ============================================================================
+        // V6.1d: HELPERS ADAPTATIVOS (WR Y R:R DINÁMICO)
+        // ============================================================================
+        
+        /// <summary>
+        /// V6.1d: Calcula Win Rate reciente en ventana deslizante
+        /// </summary>
+        private double GetRecentWinRate(int window)
+        {
+            if (window <= 0 || _recentResults.Count == 0) return 0.5;
+            int n = Math.Min(window, _recentResults.Count);
+            return _recentResults.Reverse().Take(n).Count(x => x) / (double)n;
+        }
+
+        /// <summary>
+        /// V6.1d: Calcula R:R mínimo adaptativo basado en WR reciente
+        /// minRR = (1-WR)/WR con floor/ceil
+        /// Expuesto públicamente para uso por CoreEngine
+        /// </summary>
+        public double GetAdaptiveMinRR()
+        {
+            double wr = GetRecentWinRate(_config.RecentWR_Window);
+            // Si no hay datos suficientes, usar 0.5 (neutro)
+            if (double.IsNaN(wr) || wr <= 0) wr = 0.5;
+            double raw = (1.0 - wr) / Math.Max(1e-9, wr);
+            return Math.Min(_config.RRminCeil, Math.Max(_config.RRminFloor, raw));
         }
     }
 }
