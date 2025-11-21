@@ -82,10 +82,88 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             // Almacenar decisión en snapshot
             snapshot.Metadata["FinalDecision"] = decision;
 
-            _logger.Info(string.Format(
-                "[OutputAdapter] Decisión generada: {0} @ {1:F2}, Confidence: {2:F3}",
-                decision.Action, decision.Entry, decision.Confidence
-            ));
+            // ═══════════════════════════════════════════════════════════════
+            // [SIGNAL_METRICS] — Instrumentación para analizar DistATR al nacer cada señal
+            // ═══════════════════════════════════════════════════════════════
+            double distAtr = -1.0;
+            double distPts = -1.0;
+            string zoneId = bestZone?.Id ?? "NA";
+            int tfDom = bestZone?.TFDominante ?? _config.DecisionTimeframeMinutes;
+            double currentPrice = 0.0;
+            
+            // Obtener precio actual
+            if (barData != null && currentBar >= 0)
+            {
+                try
+                {
+                    currentPrice = barData.GetClose(timeframeMinutes, currentBar);
+                }
+                catch
+                {
+                    currentPrice = 0.0;
+                }
+            }
+
+            // Extraer métricas de distancia de la zona
+            if (bestZone != null && bestZone.Metadata != null)
+            {
+                if (bestZone.Metadata.ContainsKey("DistanceToEntry_ATR"))
+                    distAtr = (double)bestZone.Metadata["DistanceToEntry_ATR"];
+                if (bestZone.Metadata.ContainsKey("DistanceToEntry_Points"))
+                    distPts = (double)bestZone.Metadata["DistanceToEntry_Points"];
+            }
+
+            // Calcular distancia en puntos si no está en metadata
+            if (distPts < 0 && decision.Entry > 0 && currentPrice > 0)
+                distPts = Math.Abs(currentPrice - decision.Entry);
+
+            // Leer ATRdom de metadata (calculado por RiskCalculator)
+            double atrDom = -1.0;
+            if (bestZone?.Metadata != null && bestZone.Metadata.ContainsKey("ATRdom"))
+            {
+                atrDom = (double)bestZone.Metadata["ATRdom"];
+            }
+
+            // Calcular DistATR solo si ATR válido y no fallback 1.0
+            if (distPts >= 0 && atrDom > 0 && atrDom != 1.0)
+                distAtr = distPts / atrDom;
+
+            // ✅ Si Action=WAIT pero bestZone existía (fue rechazada), extraer Entry/SL/TP de metadata para análisis MFE/MAE
+            double entryLog = decision.Entry;
+            double slLog = decision.StopLoss;
+            double tpLog = decision.TakeProfit;
+            string rejectReason = "";
+            
+            if (decision.Action == "WAIT" && bestZone != null && bestZone.Metadata != null)
+            {
+                if (bestZone.Metadata.ContainsKey("Entry"))
+                    entryLog = (double)bestZone.Metadata["Entry"];
+                if (bestZone.Metadata.ContainsKey("SL"))
+                    slLog = (double)bestZone.Metadata["SL"];
+                if (bestZone.Metadata.ContainsKey("TP"))
+                    tpLog = (double)bestZone.Metadata["TP"];
+                if (bestZone.Metadata.ContainsKey("DFM_RejectReason"))
+                    rejectReason = bestZone.Metadata["DFM_RejectReason"].ToString();
+                    
+                // Recalcular distPts con entry real si estaba en 0
+                if (entryLog > 0 && currentPrice > 0)
+                    distPts = Math.Abs(currentPrice - entryLog);
+            }
+
+            // Solo loguear métricas y decisiones para BUY/SELL (no spamear WAIT)
+            if (!string.Equals(decision.Action, "WAIT", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.Info($"[SIGNAL_METRICS] Zone={zoneId} TF={tfDom} Action={decision.Action} Entry={entryLog:F2} SL={slLog:F2} TP={tpLog:F2} Conf={decision.Confidence:F3} DistPts={distPts:F2} ATRdom={atrDom:F2} DistATR={distAtr:F2} Reason={rejectReason}");
+                
+                _logger.Info(string.Format(
+                    "[OutputAdapter] Decisión generada: {0} @ {1:F2}, Confidence: {2:F3}",
+                    decision.Action, decision.Entry, decision.Confidence
+                ));
+            }
+            else
+            {
+                _logger.Debug($"[OutputAdapter] WAIT Conf={decision.Confidence:F3}");
+            }
         }
         
         /// <summary>
@@ -141,7 +219,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 }
                 
                 double currentPrice = barData.GetClose(60, idx60);
-                double atr60 = barData.GetATR(60, idx60, 14);
+                // Firma correcta: GetATR(tfMinutes, period, barIndex)
+                double atr60 = barData.GetATR(60, 14, idx60);
                 
                 if (atr60 <= 0)
                 {
@@ -247,6 +326,19 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             string rationale = GenerateRationale(action, entry, stopLoss, takeProfit, positionSize, actualRR,
                 accountRisk, zone, confidence, breakdown, snapshot);
 
+            // V6.0i.9: Extraer DistATR y DistPts desde zone.Metadata (calculados por RiskCalculator)
+            double distanceToEntryATR = -1.0;
+            double distanceToEntryPoints = 0.0;
+            
+            if (zone?.Metadata != null)
+            {
+                if (zone.Metadata.ContainsKey("DistanceToEntry_ATR"))
+                    distanceToEntryATR = (double)zone.Metadata["DistanceToEntry_ATR"];
+                
+                if (zone.Metadata.ContainsKey("DistanceToEntry_Points"))
+                    distanceToEntryPoints = (double)zone.Metadata["DistanceToEntry_Points"];
+            }
+            
             return new TradeDecision
             {
                 Id = Guid.NewGuid().ToString(),
@@ -260,6 +352,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 Explainability = breakdown,
                 SourceStructureIds = zone.SourceStructureIds,
                 DominantStructureId = zone.DominantStructureId, // Para TradeManager
+                DistanceToEntryATR = distanceToEntryATR, // V6.0i.9: Para gate por distancia en TradeManager
+                DistanceToEntryPoints = distanceToEntryPoints, // V6.0i.9: Fallback si ATR no válido
                 GeneratedAt = DateTime.UtcNow
             };
         }

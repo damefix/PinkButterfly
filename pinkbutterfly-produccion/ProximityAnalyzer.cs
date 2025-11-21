@@ -79,6 +79,20 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 // Calcular distancia y proximidad (sesgo-consciente)
                 CalculateProximityV56(zone, currentPrice, barData, currentBar, isAligned, snapshot.GlobalBiasStrength);
 
+                // Gate temprano por distancia (usar umbral de registro unificado)
+                if (zone.Metadata.ContainsKey("DistanceATR"))
+                {
+                    double distAtr = (double)zone.Metadata["DistanceATR"];
+                    bool isHV = snapshot.MarketRegime == "HighVol";
+                    double maxGate = isHV ? _config.MaxDistanceToRegister_ATR_HighVol : _config.MaxDistanceToRegister_ATR_Normal;
+                    if (distAtr > maxGate)
+                    {
+                        if (_config.EnablePerfDiagnostics && _config.EnableDebug)
+                            _logger.Debug($"[ProximityAnalyzer] SKIP Zone={zone.Id} DistATR={distAtr:F2} > Gate={maxGate:F2} (Regime={snapshot.MarketRegime})");
+                        continue;
+                    }
+                }
+
                 // Filtrar zonas demasiado lejas
                 double proximityFactor = zone.Metadata.ContainsKey("ProximityFactor")
                     ? (double)zone.Metadata["ProximityFactor"]
@@ -112,15 +126,24 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 }
             }
 
-            // Ordenar por proximidad (más cercanas primero)
+            // Ordenar por proximidad (más cercanas primero) + desempates deterministas
             processedZones = processedZones
                 .OrderByDescending(z => (double)z.Metadata["ProximityFactor"])
+                .ThenByDescending(z => z.TFDominante)
+                .ThenByDescending(z => z.Score)                    // Score de la zona
+                .ThenByDescending(z => z.ConfluenceCount)          // Más confluencias
+                .ThenBy(z => z.Metadata.ContainsKey("DistanceATR") ? (double)z.Metadata["DistanceATR"] : 999.0)
+                .ThenBy(z => z.Low)
+                .ThenBy(z => z.High)
+                .ThenBy(z => z.DominantType, StringComparer.Ordinal)
                 .ToList();
 
             // V5.6.4: si existen zonas alineadas con Proximity>0, preferirlas y purgar contra-bias este ciclo
             bool hasAligned = processedZones.Any(z => z.Metadata.ContainsKey("AlignedWithBias")
                                                       && (bool)z.Metadata["AlignedWithBias"]
                                                       && (double)z.Metadata["ProximityFactor"] > 0.0);
+            // Guard: no aplicar PreferAligned si el bias global es Neutral (evita vaciar el embudo)
+            bool isNeutralBias = snapshot.GlobalBias == "Neutral";
             // Diagnóstico previo a preferencia
             int preAligned = processedZones.Count(z => z.Metadata.ContainsKey("AlignedWithBias") && (bool)z.Metadata["AlignedWithBias"]);
             int preCounter = processedZones.Count - preAligned;
@@ -131,7 +154,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             _logger.Info(string.Format("[DIAGNOSTICO][Proximity] Pre: Aligned={0}/{1} Counter={2}/{3} AvgProxAligned={4:F3} AvgDistATRAligned={5:F2}",
                 preAligned, processedZones.Count, preCounter, processedZones.Count, preAvgProxAligned, preAvgDistAligned));
 
-            if (hasAligned)
+            if (!isNeutralBias && hasAligned)
             {
                 int before = processedZones.Count;
                 processedZones = processedZones

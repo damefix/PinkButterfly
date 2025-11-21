@@ -275,6 +275,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     if (currentClose >= ob.Low && currentClose <= ob.High)
                     {
                         ob.TouchCount_Body++;
+                        ob.LastUpdatedBarIndex = barIndex; // ✅ Actualizar actividad reciente
                         updated = true;
 
                         if (_config.EnableDebug)
@@ -285,6 +286,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                              (currentLow >= ob.Low && currentLow <= ob.High))
                     {
                         ob.TouchCount_Wick++;
+                        ob.LastUpdatedBarIndex = barIndex; // ✅ Actualizar actividad reciente
                         updated = true;
 
                         if (_config.EnableDebug)
@@ -365,7 +367,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     // Verificar que la estructura aún existe antes de actualizar
                     if (_engine.GetStructureById(ob.Id) != null)
                     {
-                        _engine.UpdateStructure(ob);
+                        _engine.UpdateStructure(ob, barIndex);
                     }
                     else
                     {

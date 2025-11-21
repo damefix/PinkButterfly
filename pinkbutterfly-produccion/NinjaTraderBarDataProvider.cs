@@ -53,7 +53,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         // ========================================================================
 
         /// <summary>
-        /// Obtiene el tiempo de una barra específica
+        /// Obtiene el tiempo de una barra específica (ÍNDICE ABSOLUTO)
         /// </summary>
         public DateTime GetBarTime(int tfMinutes, int barIndex)
         {
@@ -63,12 +63,11 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 if (i < 0)
                     return DateTime.MinValue;
 
-                int current = _indicator.CurrentBars[i];
-                if (barIndex < 0 || barIndex > current)
+                var ba = _indicator.BarsArray[i];
+                if (barIndex < 0 || barIndex >= ba.Count)
                     return DateTime.MinValue;
 
-                int barsAgo = current - barIndex;
-                return _indicator.Times[i][barsAgo];
+                return ba.GetTime(barIndex);
             }
             catch
             {
@@ -77,7 +76,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         }
 
         /// <summary>
-        /// Obtiene el índice de barra desde un tiempo UTC
+        /// Obtiene el índice de barra desde un tiempo UTC (ÍNDICE ABSOLUTO)
         /// </summary>
         public int GetBarIndexFromTime(int tfMinutes, DateTime timeUtc)
         {
@@ -87,18 +86,20 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 if (i < 0)
                     return -1;
 
-                int left = 0;
-                int right = _indicator.CurrentBars[i];
-                if (right < 0)
+                var ba = _indicator.BarsArray[i];
+                int count = ba.Count;
+                if (count == 0)
                     return -1;
 
-                // Binary search (series descendentes): último índice mid donde Time(mid) <= timeUtc (at-or-before)
+                int left = 0;
+                int right = count - 1;
+
+                // Binary search: último índice donde GetTime(index) <= timeUtc (at-or-before)
                 int result = -1;
                 while (left <= right)
                 {
                     int mid = left + ((right - left) / 2);
-                    int barsAgo = _indicator.CurrentBars[i] - mid;
-                    DateTime t = _indicator.Times[i][barsAgo];
+                    DateTime t = ba.GetTime(mid);
                     if (t <= timeUtc)
                     {
                         result = mid;      // candidato válido (at-or-before)
@@ -119,12 +120,15 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         }
 
         /// <summary>
-        /// Obtiene el índice de la última barra cerrada
+        /// Obtiene el índice de la última barra cerrada (ÍNDICE ABSOLUTO)
         /// </summary>
         public int GetCurrentBarIndex(int tfMinutes)
         {
             int i = GetSeriesIndexForTF(tfMinutes);
-            return i >= 0 ? _indicator.CurrentBars[i] : -1;
+            if (i < 0) return -1;
+            
+            var ba = _indicator.BarsArray[i];
+            return ba.Count > 0 ? ba.Count - 1 : -1;
         }
 
         /// <summary>
@@ -141,7 +145,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         }
 
         /// <summary>
-        /// Obtiene el precio de apertura de una barra
+        /// Obtiene el precio de apertura de una barra (ÍNDICE ABSOLUTO)
         /// </summary>
         public double GetOpen(int tfMinutes, int barIndex)
         {
@@ -149,12 +153,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             {
                 int i = GetSeriesIndexForTF(tfMinutes);
                 if (i < 0) return 0.0;
-                int current = _indicator.CurrentBars[i];
-                if (barIndex < 0 || barIndex > current)
+
+                var ba = _indicator.BarsArray[i];
+                if (barIndex < 0 || barIndex >= ba.Count)
                     return 0.0;
 
-                int barsAgo = current - barIndex;
-                return _indicator.Opens[i][barsAgo];
+                return ba.GetOpen(barIndex);
             }
             catch
             {
@@ -163,7 +167,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         }
 
         /// <summary>
-        /// Obtiene el precio máximo de una barra
+        /// Obtiene el precio máximo de una barra (ÍNDICE ABSOLUTO)
         /// </summary>
         public double GetHigh(int tfMinutes, int barIndex)
         {
@@ -171,12 +175,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             {
                 int i = GetSeriesIndexForTF(tfMinutes);
                 if (i < 0) return 0.0;
-                int current = _indicator.CurrentBars[i];
-                if (barIndex < 0 || barIndex > current)
+
+                var ba = _indicator.BarsArray[i];
+                if (barIndex < 0 || barIndex >= ba.Count)
                     return 0.0;
 
-                int barsAgo = current - barIndex;
-                return _indicator.Highs[i][barsAgo];
+                return ba.GetHigh(barIndex);
             }
             catch
             {
@@ -185,7 +189,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         }
 
         /// <summary>
-        /// Obtiene el precio mínimo de una barra
+        /// Obtiene el precio mínimo de una barra (ÍNDICE ABSOLUTO)
         /// </summary>
         public double GetLow(int tfMinutes, int barIndex)
         {
@@ -193,12 +197,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             {
                 int i = GetSeriesIndexForTF(tfMinutes);
                 if (i < 0) return 0.0;
-                int current = _indicator.CurrentBars[i];
-                if (barIndex < 0 || barIndex > current)
+
+                var ba = _indicator.BarsArray[i];
+                if (barIndex < 0 || barIndex >= ba.Count)
                     return 0.0;
 
-                int barsAgo = current - barIndex;
-                return _indicator.Lows[i][barsAgo];
+                return ba.GetLow(barIndex);
             }
             catch
             {
@@ -207,7 +211,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         }
 
         /// <summary>
-        /// Obtiene el precio de cierre de una barra
+        /// Obtiene el precio de cierre de una barra (ÍNDICE ABSOLUTO)
         /// </summary>
         public double GetClose(int tfMinutes, int barIndex)
         {
@@ -215,12 +219,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             {
                 int i = GetSeriesIndexForTF(tfMinutes);
                 if (i < 0) return 0.0;
-                int current = _indicator.CurrentBars[i];
-                if (barIndex < 0 || barIndex > current)
+
+                var ba = _indicator.BarsArray[i];
+                if (barIndex < 0 || barIndex >= ba.Count)
                     return 0.0;
 
-                int barsAgo = current - barIndex;
-                return _indicator.Closes[i][barsAgo];
+                return ba.GetClose(barIndex);
             }
             catch
             {
@@ -272,12 +276,12 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             {
                 int i = GetSeriesIndexForTF(tfMinutes);
                 if (i < 0) return null;
-                int current = _indicator.CurrentBars[i];
-                if (barIndex < 0 || barIndex > current)
+
+                var ba = _indicator.BarsArray[i];
+                if (barIndex < 0 || barIndex >= ba.Count)
                     return null;
 
-                int barsAgo = current - barIndex;
-                double volume = (double)_indicator.Volumes[i][barsAgo];
+                double volume = (double)ba.GetVolume(barIndex);
                 
                 return volume > 0 ? volume : (double?)null;
             }

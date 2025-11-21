@@ -61,9 +61,34 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             
             foreach (int tf in _config.TimeframesToUse)
             {
-                var structures = coreEngine.GetAllStructures(tf)
-                    .Where(s => s.IsActive && s.Score >= _config.HeatZone_MinScore)
-                    .ToList();
+                var allStructures = coreEngine.GetAllStructures(tf).Where(s => s.IsActive).ToList();
+                var rejectedStructures = allStructures.Where(s => s.Score < _config.HeatZone_MinScore).ToList();
+                var structures = allStructures.Where(s => s.Score >= _config.HeatZone_MinScore).ToList();
+                
+                int rejected = rejectedStructures.Count;
+                
+                if (_config.EnablePerfDiagnostics && allStructures.Count > 0)
+                {
+                    var avgScore = allStructures.Average(s => s.Score);
+                    var maxScore = allStructures.Max(s => s.Score);
+                    _logger.Info($"[FUSION][TF_FILTER] TF={tf} Total={allStructures.Count} Passed={structures.Count} Rejected={rejected} (Score<{_config.HeatZone_MinScore:F2}) AvgScore={avgScore:F2} MaxScore={maxScore:F2}");
+                    
+                    // Log detallado de primeras 3 estructuras rechazadas de TF altos (60m+)
+                    if (tf >= 60 && rejected > 0)
+                    {
+                        // Convertir currentBar (TF decisión) a índice del TF de la estructura
+                        DateTime currentTime = barData.GetBarTime(timeframeMinutes, currentBar);
+                        int currentBarInStructureTF = barData.GetBarIndexFromTime(tf, currentTime);
+                        
+                        foreach (var s in rejectedStructures.Take(3))
+                        {
+                            int ageBars = currentBarInStructureTF - s.CreatedAtBarIndex;
+                            int ageMinutes = ageBars * tf;
+                            int ageDays = ageMinutes / 1440;
+                            _logger.Info($"  └─ REJECTED: Type={s.Type} Score={s.Score:F3} Age={ageBars}bars_TF{tf} ({ageDays}días) TouchBody={s.TouchCount_Body} Active={s.IsActive}");
+                        }
+                    }
+                }
                 
                 // Clasificar: TFs >= 60m son Anchors, TFs < 60m son Triggers
                 if (tf >= 60)
@@ -106,8 +131,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             var heatZones = new List<HeatZone>();
             var assignedTriggers = new HashSet<string>();
 
-            // Ordenar Triggers por score descendente (mejores primero)
-            triggers = triggers.OrderByDescending(s => s.Score).ToList();
+            // NO ordenar - preservar secuencia temporal de inserción (Fase 1)
+            // triggers ya vienen ordenados temporalmente desde AddRange(structures)
 
             int sfBull = 0, sfBear = 0, sfNeutral = 0, sfWithAnchors = 0;
             foreach (var trigger in triggers)
@@ -240,7 +265,8 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             double zoneSizeATR = zoneSize / atr;
             if (zoneSizeATR > _config.MaxZoneSizeATR)
             {
-                _logger.Warning($"[StructureFusion] Zona {heatZone.Id} descartada por tamaño: {zoneSizeATR:F2} ATR (>{_config.MaxZoneSizeATR}). Rango={heatZone.Low:F2}-{heatZone.High:F2}");
+                // Cambio a Debug para evitar spam en logs (puede haber millones de zonas descartadas)
+                _logger.Debug($"[StructureFusion] Zona {heatZone.Id} descartada por tamaño: {zoneSizeATR:F2} ATR (>{_config.MaxZoneSizeATR}). Rango={heatZone.Low:F2}-{heatZone.High:F2}");
                 return null;
             }
 
@@ -314,9 +340,13 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                         ? barData.GetBarIndexFromTime(t.TF, analysisTime)
                         : int.MaxValue) - t.CreatedAtBarIndex)
                 })
-                .OrderByDescending(x => x.Weight)      // Primero: mejor Score × TFWeight
-                .ThenByDescending(x => x.Structure.TF) // Desempate: TF más alto
-                .ThenBy(x => x.Age)                    // Desempate: más fresco
+                .OrderByDescending(x => x.Weight)                       // Primero: mejor Score × TFWeight
+                .ThenByDescending(x => x.Structure.TF)                  // Desempate: TF más alto
+                .ThenBy(x => x.Age)                                     // Desempate: más fresco
+                .ThenBy(x => x.Structure.CreatedAtBarIndex)             // Desempate: más antiguo
+                .ThenBy(x => x.Structure.StartTime)                     // Desempate: por tiempo de inicio
+                .ThenBy(x => x.Structure.Low)                           // Desempate: precio bajo
+                .ThenBy(x => x.Structure.High)                          // Desempate: precio alto
                 .First();
 
             heatZone.DominantStructureId = dominantTrigger.Structure.Id;
@@ -403,8 +433,15 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             else
                 heatZone.Direction = "Neutral";
 
-            // 4. Identificar estructura dominante (mayor score)
-            var dominantStructure = structures.OrderByDescending(s => s.Score).First();
+            // 4. Identificar estructura dominante (mayor score) + desempates deterministas
+            var dominantStructure = structures
+                .OrderByDescending(s => s.Score)
+                .ThenByDescending(s => s.TF)
+                .ThenBy(s => s.CreatedAtBarIndex)
+                .ThenBy(s => s.StartTime)
+                .ThenBy(s => s.Low)
+                .ThenBy(s => s.High)
+                .First();
             heatZone.DominantStructureId = dominantStructure.Id;
             heatZone.DominantType = dominantStructure.GetType().Name;
             heatZone.TFDominante = dominantStructure.TF;

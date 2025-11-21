@@ -31,6 +31,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         private readonly ILogger _logger;
         private readonly List<IDecisionComponent> _components;
         private TradeDecision _lastDecision; // Para filtro de duplicados consecutivos
+        private int _lastDecisionBarProcessed = -1; // Evita reprocesar la misma barra de decisión
 
         /// <summary>
         /// Constructor del DecisionEngine
@@ -118,6 +119,16 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         }
 
         /// <summary>
+        /// Resetea el estado del debounce para permitir reprocesar barras.
+        /// Útil antes de ejecutar replay histórico.
+        /// </summary>
+        public void ResetDebounce()
+        {
+            _lastDecisionBarProcessed = -1;
+            _lastDecision = null;
+        }
+
+        /// <summary>
         /// Genera una decisión de trading basada en el estado actual del mercado
         /// Ejecuta el pipeline completo de componentes
         /// </summary>
@@ -142,14 +153,42 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 GeneratedAt = DateTime.UtcNow
             };
 
-            // 2. Ejecutar pipeline de componentes
+            // 2.1 Normalizar SIEMPRE al TF de decisión, independientemente del TF del gráfico
+            int decisionTF = _config.DecisionTimeframeMinutes;
+            // Intentar alinear por tiempo de la barra invocante; si falla, usar última barra del TF decisión
+            DateTime analysisTime;
+            try { analysisTime = barData.GetBarTime(timeframeMinutes, currentBar); }
+            catch { analysisTime = DateTime.MinValue; }
+            int decisionBarIndex = barData.GetBarIndexFromTime(decisionTF, analysisTime);
+            if (decisionBarIndex < 0)
+                decisionBarIndex = barData.GetCurrentBarIndex(decisionTF);
+            
+            // 2.2 Evitar reprocesar la misma barra de decisión (debounce determinista)
+            if (_lastDecisionBarProcessed == decisionBarIndex)
+            {
+                _logger.Debug($"[DecisionEngine] Skip duplicate call for decision bar {decisionTF}@{decisionBarIndex}");
+                return _lastDecision ?? new TradeDecision {
+                    Id = Guid.NewGuid().ToString(),
+                    Action = "WAIT",
+                    Confidence = 0.0,
+                    Entry = 0.0,
+                    StopLoss = 0.0,
+                    TakeProfit = 0.0,
+                    PositionSizeContracts = 0.0,
+                    Rationale = "WAIT - Duplicate decision bar call skipped",
+                    GeneratedAt = DateTime.UtcNow
+                };
+            }
+            _lastDecisionBarProcessed = decisionBarIndex;
+            
+            // 2.3 Ejecutar pipeline SIEMPRE con (pipelineBar, pipelineTF) = (decisionBarIndex, decisionTF)
             foreach (var component in _components)
             {
                 _logger.Debug("[DecisionEngine] Ejecutando componente: " + component.ComponentName);
                 
                 try
                 {
-                    component.Process(snapshot, barData, coreEngine, currentBar, timeframeMinutes, accountSize);
+                    component.Process(snapshot, barData, coreEngine, decisionBarIndex, decisionTF, accountSize);
                 }
                 catch (Exception ex)
                 {

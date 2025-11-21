@@ -1,0 +1,4 @@
+Script analizador-diagnostico-logs.py ya corregido (3 imports locales Counter eliminados)
+Listo para procesar logs con eventos DEDUP
+
+

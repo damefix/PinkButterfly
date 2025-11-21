@@ -70,8 +70,14 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
             if (recentSwings.Count < 2)
                 return;
 
-            // Ordenar por fecha (más reciente primero)
-            var sortedSwings = recentSwings.OrderByDescending(s => s.CreatedAtBarIndex).ToList();
+            // Ordenar por fecha (más reciente primero) + desempates deterministas
+            var sortedSwings = recentSwings
+                .OrderByDescending(s => s.CreatedAtBarIndex)
+                .ThenByDescending(s => s.TF)
+                .ThenBy(s => s.StartTime)
+                .ThenBy(s => s.Low)
+                .ThenBy(s => s.High)
+                .ToList();
 
             // El swing más reciente es el candidato
             var candidateSwing = sortedSwings[0];
@@ -229,6 +235,40 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 bool isDoubleTop = doublePattern.Type == "DOUBLE_TOP";
                 int ageInBars = barIndex - doublePattern.CreatedAtBarIndex;
 
+                // ============================================================
+                // TOUCH DETECTION (NUEVO)
+                // ============================================================
+                
+                double currentClose = _provider.GetClose(tfMinutes, barIndex);
+                double currentHigh = _provider.GetHigh(tfMinutes, barIndex);
+                double currentLow = _provider.GetLow(tfMinutes, barIndex);
+                
+                // Detectar si el precio está dentro de la zona del double
+                bool priceInZone = currentClose >= doublePattern.Low && currentClose <= doublePattern.High;
+                bool wickTouch = (currentHigh >= doublePattern.Low && currentHigh <= doublePattern.High) ||
+                                 (currentLow >= doublePattern.Low && currentLow <= doublePattern.High);
+
+                if (priceInZone)
+                {
+                    doublePattern.TouchCount_Body++;
+                    doublePattern.LastUpdatedBarIndex = barIndex; // ✅ Actualizar actividad reciente
+                    
+                    if (_config.EnableDebug)
+                        _logger.Debug($"DoubleDetector: Body touch on {doublePattern.Id} (count={doublePattern.TouchCount_Body})");
+                }
+                else if (wickTouch)
+                {
+                    doublePattern.TouchCount_Wick++;
+                    doublePattern.LastUpdatedBarIndex = barIndex; // ✅ Actualizar actividad reciente
+                    
+                    if (_config.EnableDebug)
+                        _logger.Debug($"DoubleDetector: Wick touch on {doublePattern.Id} (count={doublePattern.TouchCount_Wick})");
+                }
+
+                // ============================================================
+                // CONFIRMATION CHECK (EXISTENTE)
+                // ============================================================
+                
                 // Verificar confirmación (precio rompe neckline)
                 bool confirmed = CheckConfirmation(tfMinutes, barIndex, doublePattern, isDoubleTop);
 
@@ -241,7 +281,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     // Verificar existencia antes de actualizar
                     if (_engine.GetStructureById(doublePattern.Id) != null)
                     {
-                        _engine.UpdateStructure(doublePattern);
+                        _engine.UpdateStructure(doublePattern, barIndex);
                     }
 
                     if (_config.EnableDebug)
@@ -265,7 +305,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                         // Verificar existencia antes de actualizar
                         if (_engine.GetStructureById(doublePattern.Id) != null)
                         {
-                            _engine.UpdateStructure(doublePattern);
+                            _engine.UpdateStructure(doublePattern, barIndex);
                         }
 
                         if (_config.EnableDebug)

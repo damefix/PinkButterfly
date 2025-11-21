@@ -88,8 +88,15 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// </summary>
         private void DetectStructureBreaks(int tfMinutes, int barIndex)
         {
-            // Obtener swings activos del timeframe
-            var swings = _engine.GetRecentSwings(tfMinutes, maxCount: 100);
+            // Obtener swings: activos + rotos en ESTA barra (para detectar el break)
+            // Los swings rotos pasan a IsActive=false, pero BOSDetector necesita verlos
+            // en el momento exacto del break para crear el BOS/CHoCH
+            var swings = _engine.GetAllStructures(tfMinutes)
+                .OfType<SwingInfo>()
+                .Where(s => s.IsActive || (s.IsBroken && s.LastUpdatedBarIndex == barIndex))
+                .OrderByDescending(s => s.CreatedAtBarIndex)
+                .Take(100)
+                .ToList();
 
             if (swings.Count == 0)
                 return;
@@ -147,7 +154,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     continue;
 
                 // Determinar si es BOS o CHoCH
-                string breakType = DetermineBreakType(breakDirection, currentBias);
+                string breakType = DetermineBreakType(tfMinutes, barIndex, breakDirection, currentBias);
 
                 // Calcular momentum
                 double bodySize = Math.Abs(currentClose - currentOpen);
@@ -156,6 +163,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                 // Crear StructureBreakInfo
                 var breakInfo = new StructureBreakInfo
                 {
+                    Type = breakType,  // V6.0k FIX: Establecer Type para filtro en ContextManager
                     BreakType = breakType,
                     BrokenSwingId = swing.Id,
                     BreakPrice = currentClose,
@@ -164,12 +172,14 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     TF = tfMinutes,
                     StartTime = currentTime,
                     EndTime = currentTime,
-                    High = swing.IsHigh ? currentHigh : swing.High,
-                    Low = swing.IsHigh ? swing.Low : currentLow,
+                    High = swing.High,  // Rango del swing roto
+                    Low = swing.Low,    // Rango del swing roto
                     CreatedAtBarIndex = barIndex,
                     LastUpdatedBarIndex = barIndex,
                     IsActive = true,
-                    IsCompleted = true
+                    IsCompleted = true,
+                    SwingBarIndex = swing.CreatedAtBarIndex,  // Barra donde se formó el swing
+                    SwingPrice = swing.IsHigh ? swing.High : swing.Low  // Precio del swing
                 };
 
                 // Metadata
@@ -239,14 +249,44 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
         /// <summary>
         /// Determina si la ruptura es BOS (continúa tendencia) o CHoCH (reversión)
         /// </summary>
+        /// <param name="tfMinutes">Timeframe en minutos</param>
+        /// <param name="barIndex">Índice de la barra actual</param>
         /// <param name="breakDirection">Dirección de la ruptura: "Bullish" o "Bearish"</param>
         /// <param name="currentBias">Bias actual del mercado: "Bullish", "Bearish", "Neutral"</param>
         /// <returns>"BOS" si continúa tendencia, "CHoCH" si es reversión</returns>
-        private string DetermineBreakType(string breakDirection, string currentBias)
+        private string DetermineBreakType(int tfMinutes, int barIndex, string breakDirection, string currentBias)
         {
-            // Si no hay bias definido, asumimos que es BOS (inicio de tendencia)
+            // Si el bias es Neutral, debemos buscar la dirección de la última ruptura confirmada
+            // para determinar si esta ruptura continúa o revierte
             if (currentBias == "Neutral")
-                return "BOS";
+            {
+                StructureBreakInfo last = null;
+                
+                // 1) Intentar con la caché local del TF (solo breaks previos a la barra actual)
+                if (_breakCacheByTF.TryGetValue(tfMinutes, out var list) && list != null && list.Count > 0)
+                {
+                    last = list
+                        .Where(b => b.LastUpdatedBarIndex < barIndex)
+                        .OrderByDescending(b => b.LastUpdatedBarIndex)
+                        .FirstOrDefault();
+                }
+                
+                // 2) Fallback: consultar al engine con filtro temporal manual
+                if (last == null && _engine != null)
+                {
+                    var recent = _engine.GetStructureBreaks(tfMinutes, null, 50)
+                        .Where(b => b.CreatedAtBarIndex <= barIndex)
+                        .OrderByDescending(b => b.CreatedAtBarIndex)
+                        .FirstOrDefault();
+                    
+                    if (recent != null)
+                        last = recent;
+                }
+                
+                var result = (last != null && breakDirection == last.Direction) ? "BOS" : "CHoCH";
+                _logger?.Info($"[BOS_CLASS] tf={tfMinutes} idx={barIndex} bias=Neutral lastDir={last?.Direction ?? "NA"} breakDir={breakDirection} -> {result}");
+                return result;
+            }
 
             // BOS: Ruptura en la misma dirección del bias
             // CHoCH: Ruptura en dirección contraria al bias

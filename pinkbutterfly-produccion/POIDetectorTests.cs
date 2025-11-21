@@ -1000,7 +1000,7 @@ namespace PinkButterfly.Tests
             {
                 var fvg = fvgs[0];
                 fvg.IsActive = false;
-                engine.UpdateStructure(fvg);
+                engine.UpdateStructure(fvg, 0); // barIndex dummy para test
             }
 
             // Añadir barra para que POIDetector procese la actualización
@@ -1171,12 +1171,12 @@ namespace PinkButterfly.Tests
             foreach (var fvg in fvgs)
             {
                 fvg.IsActive = false;
-                engine.UpdateStructure(fvg);
+                engine.UpdateStructure(fvg, 0); // barIndex dummy para test
             }
             foreach (var ob in obs)
             {
                 ob.IsActive = false;
-                engine.UpdateStructure(ob);
+                engine.UpdateStructure(ob, 0); // barIndex dummy para test
             }
 
             AddBar(provider, 5010, 5012, 5008, 5011);

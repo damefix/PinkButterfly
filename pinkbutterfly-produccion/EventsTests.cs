@@ -172,7 +172,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
 
             // Actualizar la estructura
             fvg.TouchCount_Body++;
-            engine.UpdateStructure(fvg);
+            engine.UpdateStructure(fvg, 0); // barIndex dummy para test
 
             // Validar que el evento se disparó
             Assert(eventFired, "Event_OnStructureUpdated_Fired", "Evento no se disparó");

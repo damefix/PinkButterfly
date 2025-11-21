@@ -154,12 +154,19 @@ def parse_log(log_path: str) -> dict:
         rf"\[(?:{re_diagnostic_tag})\]\[Risk\]\s*SL_CANDIDATE:\s*Idx=(\d+)\s*Type=(\w+)\s*Score=([0-9\.,]+)\s*TF=(\d+)\s*DistATR=([0-9\.,]+)\s*Age=(\d+)\s*Price=([0-9\.,]+)\s*InBand=(True|False)")
     re_sl_selected = re.compile(
         rf"\[(?:{re_diagnostic_tag})\]\[Risk\]\s*SL_SELECTED:\s*Zone=(\S+)\s*Type=(\w+)\s*Score=([0-9\.,]+)\s*TF=(-?\d+)\s*DistATR=([0-9\.,]+)\s*Age=(\d+)\s*Price=([0-9\.,]+)\s*Reason=(\S+)")
+    # Compatibilidad con engine actual: aceptar cualquier orden, basta capturar slATR
+    re_rc_sl_pick = re.compile(r"\[RC_SL_PICK\].*slATR=([0-9\.\-]+)", re.IGNORECASE)
     re_tp_candidates = re.compile(
         rf"\[(?:{re_diagnostic_tag})\]\[Risk\]\s*TP_CANDIDATES:\s*Zone=(\S+)\s*Dir=(\w+)\s*TotalCandidates=(\d+)")
     re_tp_candidate = re.compile(
         rf"\[(?:{re_diagnostic_tag})\]\[Risk\]\s*TP_CANDIDATE:\s*Idx=(\d+)\s*Priority=(\S+)\s*Type=(\w+)\s*Score=([0-9\.,]+)\s*TF=(\d+)\s*DistATR=([0-9\.,]+)\s*Age=(\d+)\s*Price=([0-9\.,]+)\s*RR=([0-9\.,]+)")
     re_tp_selected = re.compile(
         rf"\[(?:{re_diagnostic_tag})\]\[Risk\]\s*TP_SELECTED:\s*Zone=(\S+)\s*Priority=(\S+)\s*Type=(\w+)\s*Score=([0-9\.,]+)\s*TF=(-?\d+)\s*DistATR=([0-9\.,]+)\s*Age=(\d+)\s*Price=([0-9\.,]+)\s*RR=([0-9\.,]+)\s*Reason=(\S+)")
+    # Compatibilidad: aceptar tanto [TP_PICK] como [RISK][TP_PICK] (formato genérico fuera de [DIAGNOSTICO])
+    re_tp_pick_generic = re.compile(
+        r"\[(?:RISK\]\[)?TP_PICK\]\s*Zone=(\S+).*?Type=(\S+)\s*TF=(-?\d+).*?DistATR=([0-9\.,]+)\s*RR=([0-9\.,]+).*?(?:Score|FinalScore)=([0-9\.,]+).*?Price=([0-9\.,]+)(?:\s*Reason=(\S+))?",
+        re.IGNORECASE
+    )
 
     # StructureFusion diagnostics (nuevo en V5.6.9)
     # Por zona: [DIAGNOSTICO][StructureFusion] HZ=... Triggers=X Anchors=Y BullDir=a BearDir=b → Dir=Z Reason=... Bias=...
@@ -179,6 +186,24 @@ def parse_log(log_path: str) -> dict:
     re_ctx_diag = re.compile(rf"\[(?:{re_diagnostic_tag})\]\[Context\]\s*Bias=(\w+)\s*Strength=([0-9\.,]+)\s*Close60>Avg200=(true|false)", re.IGNORECASE)
     re_tm_cancel = re.compile(r"\[TradeManager\].*ORDEN (CANCELADA|EXPIRADA).*Razón:?\s*(.*)")
     re_tm_cancel_diag = re.compile(rf"\[(?:{re_diagnostic_tag})\]\[TM\]\s*Cancel_BOS\s*Action=(BUY|SELL)\s*Bias=(\w+)")
+
+    # NUEVOS TAGS: Timing/Approach/HTF/BiasFast/SL MinFloor
+    re_timing_adapt = re.compile(r"\[TIMING_ADAPT\].*TF=(\d+)\s*Bar=(\d+).*?score=([0-9\./]+)", re.IGNORECASE)
+    re_entry_approach_reject = re.compile(r"\[ENTRY_APPROACH_REJECT\].*Bar=(\d+)\s*Action=(BUY|SELL)", re.IGNORECASE)
+    re_htf_confl = re.compile(r"\[HTF_CONFL\].*samples=(\d+).*median=([0-9\.,\-]+).*thr=([0-9\.,\-]+).*ok=(True|False)", re.IGNORECASE)
+    re_htf_confl_reject = re.compile(r"\[HTF_CONFL_REJECT\].*TF=(\d+)\s*Bar=(\d+)\s*Action=(BUY|SELL)", re.IGNORECASE)
+    # Formato enriquecido (incluye biasAdj y volAdj explícitos)
+    re_htf_confl_v2 = re.compile(r"\[HTF_CONFL\].*median=([0-9\.,\-]+).*biasAdj=([0-9\.,\-]+).*volAdj=([0-9\.,\-]+).*thr=([0-9\.,\-]+).*ok=(True|False)", re.IGNORECASE)
+    # Fallback ultra-tolerante (por si cambia el orden o faltan campos)
+    re_htf_confl_any = re.compile(r"\[HTF_CONFL\].*median=([0-9\.,\-]+).*thr=([0-9\.,\-]+).*ok=([A-Za-z]+)", re.IGNORECASE)
+    re_bias_fast = re.compile(r"\[BIAS_FAST\].*idx60=(\d+).*ema20N=([0-9\.,\-]+).*ema50N=([0-9\.,\-]+).*bos=([0-9\.,\-]+).*regN=([0-9\.,\-]+).*dead=([0-9\.,\-]+).*vol=([0-9\.,\-]+).*score=([0-9\.,\-]+)\s*dir=(\w+)", re.IGNORECASE)
+    # Fallback más tolerante por si cambian campos intermedios
+    re_bias_fast_simple = re.compile(r"\[BIAS_FAST\].*score=([0-9\.,\-]+)\s*dir=(\w+)", re.IGNORECASE)
+    re_bias_fast_reject = re.compile(r"\[BIAS_FAST_REJECT\].*TF=(\d+)\s*Bar=(\d+)\s*Action=(BUY|SELL)\s*BiasFast=(\w+)\s*Score=([0-9\.,\-]+)", re.IGNORECASE)
+    re_rc_sl_minfloor = re.compile(r"\[RC_SL_MINFLOOR\].*slATR=([0-9\.,\-]+)\s*<\s*minSL_atr=([0-9\.,\-]+)", re.IGNORECASE)
+    # Diagnóstico explícito bajo etiqueta [DIAGNOSTICO]
+    re_bias_fast_diag = re.compile(rf"\[(?:{re_diagnostic_tag})\]\[Bias\]\s*FAST:\s*score=([0-9\.,\-]+)\s*dir=(\w+)", re.IGNORECASE)
+    re_htf_diag = re.compile(rf"\[(?:{re_diagnostic_tag})\]\[HTF\]\s*CONFL:\s*median=([0-9\.,\-]+)\s*thr=([0-9\.,\-]+)\s*ok=(True|False)", re.IGNORECASE)
 
     # Funnel traces (TradeManager) - aceptar con o sin ':'
     re_tm_registered = re.compile(r"\[TradeManager\].*ORDEN REGISTRADA:")
@@ -368,6 +393,31 @@ def parse_log(log_path: str) -> dict:
             'lines': 0,
             'by_action': {'BUY': 0, 'SELL': 0},
             'by_bias': {'Bullish': 0, 'Bearish': 0, 'Neutral': 0}
+        },
+        'timing': {
+            'lines': 0,
+            'sum_score': 0.0,
+            'sum_required': 0.0,  # no siempre disponible
+            'approach_rejects': 0
+        },
+        'htf': {
+            'samples': 0,
+            'ok': 0,
+            'rejects': 0,
+            'median_sum': 0.0,
+            'thr_sum': 0.0,
+            'median_last': 0.0,
+            'thr_last': 0.0
+        },
+        'bias_fast': {
+            'lines': 0,
+            'bull': 0, 'bear': 0, 'neutral': 0,
+            'rejects': 0,
+            'avg_score_sum': 0.0,
+            'bull_rej': 0, 'bear_rej': 0, 'neutral_rej': 0
+        },
+        'risk_extras': {
+            'sl_minfloor': 0
         },
         'sf': {
             'zone_lines': 0,
@@ -787,6 +837,19 @@ def parse_log(log_path: str) -> dict:
                         'reason': m.group(8)
                     })
                     continue
+                # Compatibilidad: contar [RC_SL_PICK] como selección básica de SL (sin metadatos de zona)
+                m = re_rc_sl_pick.search(line)
+                if m:
+                    stats['sl_analysis']['selected'] += 1
+                    stats['sl_analysis']['selected_list'].append({
+                        'type': 'NA',
+                        'score': 0.0,
+                        'tf': -1,
+                        'dist_atr': to_float(m.group(1)),
+                        'age': 0,
+                        'reason': 'RC_SL_PICK'
+                    })
+                    continue
 
                 # TP Analysis
                 m = re_tp_candidates.search(line)
@@ -812,14 +875,43 @@ def parse_log(log_path: str) -> dict:
                 if m:
                     stats['tp_analysis']['selected'] += 1
                     stats['tp_analysis']['selected_list'].append({
+                        'zone': m.group(1),
                         'priority': m.group(2),
                         'type': m.group(3),
                         'score': to_float(m.group(4)),
                         'tf': int(m.group(5)),
                         'dist_atr': to_float(m.group(6)),
                         'age': int(m.group(7)),
+                        'price': to_float(m.group(8)),
                         'rr': to_float(m.group(9)),
                         'reason': m.group(10)
+                    })
+                    continue
+
+                # Compatibilidad con [TP_PICK] y [RISK][TP_PICK]
+                m = re_tp_pick_generic.search(line)
+                if m:
+                    zone = m.group(1)
+                    tp_type = m.group(2)
+                    tf = int(m.group(3))
+                    distatr = to_float(m.group(4))
+                    rr = to_float(m.group(5))
+                    score = to_float(m.group(6))
+                    price = to_float(m.group(7))
+                    reason = (m.group(8) or 'TP_PICK') if len(m.groups()) >= 8 else 'TP_PICK'
+                    prio = 'P3' if tp_type.upper().startswith('P3') else ('P0' if tp_type.upper().startswith('P0') else 'NA')
+                    stats['tp_analysis']['selected'] += 1
+                    stats['tp_analysis']['selected_list'].append({
+                        'zone': zone,
+                        'priority': prio,
+                        'type': tp_type,
+                        'score': score,
+                        'tf': tf,
+                        'dist_atr': distatr,
+                        'age': 0,
+                        'price': price,
+                        'rr': rr,
+                        'reason': reason
                     })
                     continue
 
@@ -959,6 +1051,135 @@ def parse_log(log_path: str) -> dict:
                     stats['funnel']['skip_concurrency'] += 1
                     continue
 
+                # Timing adapt
+                m = re_timing_adapt.search(line)
+                if m:
+                    stats['timing']['lines'] += 1
+                    # score= A/B -> extraer A y B si existe
+                    try:
+                        scr = m.group(3)
+                        if '/' in scr:
+                            a, b = scr.split('/')
+                            stats['timing']['sum_score'] += float(a)
+                            stats['timing']['sum_required'] += float(b)
+                        else:
+                            stats['timing']['sum_score'] += float(scr)
+                    except Exception:
+                        pass
+                    continue
+                m = re_entry_approach_reject.search(line)
+                if m:
+                    stats['timing']['approach_rejects'] += 1
+                    continue
+
+                # HTF Confluence
+                m = re_htf_confl.search(line)
+                if m:
+                    stats['htf']['samples'] += 1
+                    try:
+                        ok = (m.group(4).lower() == 'true')
+                        if ok: stats['htf']['ok'] += 1
+                        stats['htf']['median_sum'] += to_float(m.group(2))
+                        stats['htf']['thr_sum'] += to_float(m.group(3))
+                        stats['htf']['median_last'] = to_float(m.group(2))
+                        stats['htf']['thr_last'] = to_float(m.group(3))
+                    except Exception:
+                        pass
+                    continue
+                # HTF Confluence (v2 enriquecido)
+                m = re_htf_confl_v2.search(line)
+                if m:
+                    stats['htf']['samples'] += 1
+                    try:
+                        ok = (m.group(5).lower() == 'true')
+                        if ok: stats['htf']['ok'] += 1
+                        stats['htf']['median_sum'] += to_float(m.group(1))
+                        stats['htf']['thr_sum'] += to_float(m.group(4))
+                        stats['htf']['median_last'] = to_float(m.group(1))
+                        stats['htf']['thr_last'] = to_float(m.group(4))
+                    except Exception:
+                        pass
+                    continue
+                # HTF Confluence (fallback genérico)
+                m = re_htf_confl_any.search(line)
+                if m:
+                    stats['htf']['samples'] += 1
+                    try:
+                        ok = (m.group(3).lower() == 'true')
+                        if ok: stats['htf']['ok'] += 1
+                        stats['htf']['median_sum'] += to_float(m.group(1))
+                        stats['htf']['thr_sum'] += to_float(m.group(2))
+                        stats['htf']['median_last'] = to_float(m.group(1))
+                        stats['htf']['thr_last'] = to_float(m.group(2))
+                    except Exception:
+                        pass
+                    continue
+                # HTF Confluence (diagnóstico explícito)
+                m = re_htf_diag.search(line)
+                if m:
+                    stats['htf']['samples'] += 1
+                    try:
+                        ok = (m.group(3).lower() == 'true')
+                        if ok: stats['htf']['ok'] += 1
+                        stats['htf']['median_sum'] += to_float(m.group(1))
+                        stats['htf']['thr_sum'] += to_float(m.group(2))
+                        stats['htf']['median_last'] = to_float(m.group(1))
+                        stats['htf']['thr_last'] = to_float(m.group(2))
+                    except Exception:
+                        pass
+                    continue
+                m = re_htf_confl_reject.search(line)
+                if m:
+                    stats['htf']['rejects'] += 1
+                    continue
+
+                # Bias Fast
+                m = re_bias_fast.search(line)
+                if m:
+                    stats['bias_fast']['lines'] += 1
+                    dirb = (m.group(9) or '').capitalize()
+                    if dirb == 'Bullish': stats['bias_fast']['bull'] += 1
+                    elif dirb == 'Bearish': stats['bias_fast']['bear'] += 1
+                    else: stats['bias_fast']['neutral'] += 1
+                    stats['bias_fast']['avg_score_sum'] += to_float(m.group(8))
+                    continue
+                m = re_bias_fast_simple.search(line)
+                if m:
+                    stats['bias_fast']['lines'] += 1
+                    dirb = (m.group(2) or '').capitalize()
+                    if dirb == 'Bullish': stats['bias_fast']['bull'] += 1
+                    elif dirb == 'Bearish': stats['bias_fast']['bear'] += 1
+                    else: stats['bias_fast']['neutral'] += 1
+                    stats['bias_fast']['avg_score_sum'] += to_float(m.group(1))
+                    continue
+                m = re_bias_fast_reject.search(line)
+                if m:
+                    stats['bias_fast']['rejects'] += 1
+                    try:
+                        dirb = (m.group(4) or '').capitalize()
+                        if dirb == 'Bullish': stats['bias_fast']['bull_rej'] += 1
+                        elif dirb == 'Bearish': stats['bias_fast']['bear_rej'] += 1
+                        else: stats['bias_fast']['neutral_rej'] += 1
+                    except Exception:
+                        pass
+                    continue
+                # Diagnóstico de Bias Fast
+                m = re_bias_fast_diag.search(line)
+                if m:
+                    stats['bias_fast']['lines'] += 1
+                    dirb = (m.group(2) or '').capitalize()
+                    if dirb == 'Bullish': stats['bias_fast']['bull'] += 1
+                    elif dirb == 'Bearish': stats['bias_fast']['bear'] += 1
+                    else: stats['bias_fast']['neutral'] += 1
+                    stats['bias_fast']['avg_score_sum'] += to_float(m.group(1))
+                    continue
+
+                # SL min floor
+                m = re_rc_sl_minfloor.search(line)
+                if m:
+                    stats['risk_extras']['sl_minfloor'] += 1
+                    continue
+
                 # StructureFusion por zona
                 m = re_sf_zone.search(line)
                 if m:
@@ -1000,6 +1221,26 @@ def parse_log(log_path: str) -> dict:
                     continue
     except FileNotFoundError:
         print(f"ERROR: No se encontró el log: {log_path}", file=sys.stderr)
+
+    # Deduplicación de TP seleccionados (evitar doble conteo por [TP_PICK] y [RISK][TP_PICK])
+    try:
+        sel = stats['tp_analysis']['selected_list']
+        deduped = []
+        seen = set()
+        for s in sel:
+            zone = s.get('zone', '')
+            tp_type = s.get('type', '')
+            tf = s.get('tf', -9999)
+            price = s.get('price', 0.0)
+            key = (zone, tp_type, tf, round(price if price is not None else 0.0, 2))
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(s)
+        stats['tp_analysis']['selected_list'] = deduped
+        stats['tp_analysis']['selected'] = len(deduped)
+    except Exception:
+        pass
 
     return stats
 
@@ -1440,7 +1681,6 @@ def render_markdown(log_path: str, csv_path: str, stats_log: dict, stats_csv: di
             lines.append(f"- Muestras: {n} | Aligned={aligned_n} ({aligned_n/n*100:.1f}%)")
             lines.append(f"- Core≈ {avg_core:.2f} | Prox≈ {avg_prox:.2f} | ConfC≈ {avg_confc:.2f} | ConfScore≈ {avg_confscore:.2f} | RR≈ {avg_rr:.2f} | Confidence≈ {avg_conf:.2f}")
             # Distribuciones SL/TP por TF y estructuralidad
-            from collections import Counter
             sl_tf_cnt = Counter(str(d['sl_tf']) for d in detail)
             tp_tf_cnt = Counter(str(d['tp_tf']) for d in detail)
             sl_struct_p = sum(1 for d in detail if d['sl_struct'])/n*100.0
@@ -1531,6 +1771,38 @@ def render_markdown(log_path: str, csv_path: str, stats_log: dict, stats_csv: di
     lines.append(f"- Eventos: {cdx['lines']} | Distribución: {cdx['bias_counts']}")
     if cdx['lines'] > 0:
         lines.append(f"- Strength promedio: {cdx['strength_sum']/cdx['lines']:.2f} | Close60>Avg200: {cdx['close_gt_avg']}/{cdx['lines']}")
+    lines.append("")
+    # Timing y Confluencia HTF (nuevas trazas)
+    tim = stats_log.get('timing', {})
+    htf = stats_log.get('htf', {})
+    bf = stats_log.get('bias_fast', {})
+    rx = stats_log.get('risk_extras', {})
+    lines.append("## Timing y Confluencia HTF")
+    if tim:
+        lines.append(f"- [TIMING_ADAPT] eventos: {tim.get('lines',0)} | Approach rejects: {tim.get('approach_rejects',0)}")
+        if tim.get('lines',0) > 0:
+            avg_sc = tim.get('sum_score',0.0) / max(1, tim.get('lines',0))
+            avg_req = tim.get('sum_required',0.0) / max(1, tim.get('lines',0))
+            lines.append(f"- Score/Req promedio: {avg_sc:.2f}/{avg_req:.2f}")
+    if htf:
+        lines.append(f"- [HTF_CONFL] muestras: {htf.get('samples',0)} | ok={htf.get('ok',0)} | rejects={htf.get('rejects',0)}")
+        if htf.get('samples',0) > 0:
+            lines.append(f"- median≈ {htf.get('median_sum',0.0)/htf.get('samples',1):.3f} | thr≈ {htf.get('thr_sum',0.0)/htf.get('samples',1):.3f}")
+    if bf:
+        lines.append(f"- [BIAS_FAST] muestras: {bf.get('lines',0)} | Bull={bf.get('bull',0)} Bear={bf.get('bear',0)} Neutral={bf.get('neutral',0)} | rejects={bf.get('rejects',0)}")
+        if bf.get('lines',0) > 0:
+            lines.append(f"- score promedio: {bf.get('avg_score_sum',0.0)/bf.get('lines',1):.2f}")
+        elif bf.get('rejects',0) > 0:
+            lines.append(f"- (proxy) Solo hay rejects: Bull={bf.get('bull_rej',0)} Bear={bf.get('bear_rej',0)} Neutral={bf.get('neutral_rej',0)}")
+    if htf:
+        lines.append(f"- [HTF_CONFL] muestras: {htf.get('samples',0)} | ok={htf.get('ok',0)} | rejects={htf.get('rejects',0)}")
+        if htf.get('samples',0) > 0:
+            med_sum = htf.get('median_sum',0.0); thr_sum = htf.get('thr_sum',0.0)
+            med = (med_sum/htf.get('samples',1)) if med_sum != 0.0 else htf.get('median_last',0.0)
+            thr = (thr_sum/htf.get('samples',1)) if thr_sum != 0.0 else htf.get('thr_last',0.0)
+            lines.append(f"- median≈ {med:.3f} | thr≈ {thr:.3f}")
+    if rx:
+        lines.append(f"- [RC_SL_MINFLOOR] filtrados: {rx.get('sl_minfloor',0)}")
     lines.append("")
     # TradeManager razones (desde log)
     lines.append("## TradeManager - Razones (desde log)")
@@ -1647,7 +1919,6 @@ def render_markdown(log_path: str, csv_path: str, stats_log: dict, stats_csv: di
             lines.append(f"- Candidatos por zona (promedio): {sla['total_candidates']/sla['zones']:.1f}")
             
             if sla['candidates']:
-                from collections import Counter
                 # Edad
                 ages_cand = [c['age'] for c in sla['candidates']]
                 ages_sel = [s['age'] for s in sla['selected_list']]
@@ -1684,7 +1955,6 @@ def render_markdown(log_path: str, csv_path: str, stats_log: dict, stats_csv: di
             lines.append(f"- Candidatos por zona (promedio): {tpa['total_candidates']/tpa['zones']:.1f}")
             
             if tpa['candidates']:
-                from collections import Counter
                 # Edad
                 ages_cand = [c['age'] for c in tpa['candidates']]
                 ages_sel = [s['age'] for s in tpa['selected_list']]

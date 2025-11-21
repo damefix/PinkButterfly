@@ -370,7 +370,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                             {
                                 // Comportamiento base: sin bonificación persistente y permitiendo recálculo posterior
                                 grabInfo.Score = newScore;
-                                _engine.UpdateStructure(grabInfo);
+                                _engine.UpdateStructure(grabInfo, barIndex);
                                 _logger.Debug($"LiquidityGrabDetector: Grab {grabInfo.Id} confirmado (sin bonus persistente) - Score: {oldScore:F3} → {grabInfo.Score:F3}");
                             }
                         }
@@ -415,7 +415,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                             {
                                 // Comportamiento base: sin bonificación persistente y permitiendo recálculo posterior
                                 grabInfo.Score = newScore;
-                                _engine.UpdateStructure(grabInfo);
+                                _engine.UpdateStructure(grabInfo, barIndex);
                                 _logger.Debug($"LiquidityGrabDetector: Grab {grabInfo.Id} confirmado (sin bonus persistente) - Score: {oldScore:F3} → {grabInfo.Score:F3}");
                             }
                         }
@@ -432,14 +432,14 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     {
                         // Recalcular normalmente (sin bonus persistente) y actualizar estructura
                         grabInfo.Score = CalculateGrabScore(grabInfo, tfMinutes, barIndex);
-                        _engine.UpdateStructure(grabInfo);
+                        _engine.UpdateStructure(grabInfo, barIndex);
                     }
                 }
                 else
                 {
                     // Para grabs no confirmados, recalcular score normalmente
                     grabInfo.Score = CalculateGrabScore(grabInfo, tfMinutes, barIndex);
-                    _engine.UpdateStructure(grabInfo);
+                    _engine.UpdateStructure(grabInfo, barIndex);
                 }
 
                 grabInfo.LastUpdatedBarIndex = barIndex;
@@ -473,7 +473,7 @@ namespace NinjaTrader.NinjaScript.Indicators.PinkButterfly
                     // Verificar existencia antes de actualizar
                     if (_engine.GetStructureById(grabInfo.Id) != null)
                     {
-                        _engine.UpdateStructure(grabInfo);
+                        _engine.UpdateStructure(grabInfo, barIndex);
                         _logger.Debug($"LiquidityGrabDetector: Grab {grabInfo.Id} purgado por edad");
                     }
                 }

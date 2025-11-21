@@ -135,9 +135,11 @@ def main():
     print("="*70)
     print("EJECUTANDO: analizador-logica-operaciones.py")
     print("="*70)
-    cmd_logica = f'python export/analizador-logica-operaciones.py'
+    cmd_logica = (
+        f'python export/analizador-logica-operaciones.py '
+        f'--log "{log_path}" --csv "{csv_path}" -o "{logica_output_temp}"'
+    )
     print(f"Comando: {cmd_logica}")
-    print("(Este script busca automáticamente los archivos más recientes)")
     print()
     
     result3 = os.system(cmd_logica)
